@@ -46,11 +46,12 @@ impl SafeTensors {
         for (name, val) in raw_map {
             let meta: TensorMeta = serde_json::from_value(val)
                 .map_err(|e| format!("Failed to parse tensor meta for '{}': {}", name, e))?;
+            println!("name -- {} , meta -- {} {} {} ",name,meta.data_offsets.to_vec()[0],meta.shape[0],meta.dtype);
             tensors.insert(name, meta);
         }
 
         let data_start = 8 + header_len;
-
+        
         Ok(Self {
             file,
             header_len,
