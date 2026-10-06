@@ -1,11 +1,13 @@
 mod config;
 mod gpu;
+mod kernels;
 mod model;
 mod safetensors;
 
 use clap::Parser;
 use config::QwenConfig;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
+use kernels::linear::LinearKernel;
 use model::{KVCache, ModelWeights};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
@@ -49,7 +51,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Initialize CUDA device
     println!("[2/5] Initializing CUDA Context on GPU {}...", selected_gpu);
-    let (_cuda_ctx, cuda_stream) = init_cuda_device(selected_gpu)?;
+    let (cuda_ctx, cuda_stream) = init_cuda_device(selected_gpu)?;
+    let linear = LinearKernel::new(&cuda_ctx)?;
 
     // Test a quick device allocation to verify context is live
     let test_buf = vec![1.0f32, 2.0f32, 3.0f32, 4.0f32];
@@ -112,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prefill: process prompt tokens
     let prefill_start = std::time::Instant::now();
     for &tok in input_tokens {
-        let logits = model.forward_token(tok as usize, current_pos, &mut cache);
+        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &cuda_stream)?;
         current_pos += 1;
 
         // Argmax on final prompt token to predict first response token
@@ -137,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        let logits = model.forward_token(next_token, current_pos, &mut cache);
+        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &cuda_stream)?;
         current_pos += 1;
         next_token = argmax(&logits);
         gen_count += 1;
@@ -176,3 +179,4 @@ fn argmax(slice: &[f32]) -> usize {
     }
     max_idx
 }
+

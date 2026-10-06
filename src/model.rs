@@ -1,5 +1,8 @@
 use crate::config::QwenConfig;
 use crate::safetensors::SafeTensors;
+use crate::kernels::linear::LinearKernel;
+use cudarc::driver::CudaStream;
+use std::sync::Arc;
 
 pub struct LayerWeights {
     pub input_layernorm: Vec<f32>,
@@ -99,7 +102,14 @@ impl ModelWeights {
     }
 
     /// Forward pass for a single token at a given position. Returns logits across vocab.
-    pub fn forward_token(&self, token_id: usize, pos: usize, cache: &mut KVCache) -> Vec<f32> {
+    pub fn forward_token(
+        &self,
+        token_id: usize,
+        pos: usize,
+        cache: &mut KVCache,
+        linear: &LinearKernel,
+        stream: &Arc<CudaStream>,
+    ) -> Result<Vec<f32>, String> {
         let hidden = self.config.hidden_size;
         let mut x = vec![0.0f32; hidden];
 
@@ -118,9 +128,9 @@ impl ModelWeights {
             let q_dim = self.config.num_attention_heads * self.config.head_dim(); // 14 * 64 = 896
             let kv_dim = self.config.num_key_value_heads * self.config.head_dim(); // 2 * 64 = 128
 
-            let mut q = matvec_bias(&layer.q_proj_weight, &layer.q_proj_bias, &x_norm, q_dim, hidden);
-            let mut k = matvec_bias(&layer.k_proj_weight, &layer.k_proj_bias, &x_norm, kv_dim, hidden);
-            let v = matvec_bias(&layer.v_proj_weight, &layer.v_proj_bias, &x_norm, kv_dim, hidden);
+            let mut q = linear.forward(stream, &x_norm, &layer.q_proj_weight, Some(&layer.q_proj_bias), 1, hidden, q_dim)?;
+            let mut k = linear.forward(stream, &x_norm, &layer.k_proj_weight, Some(&layer.k_proj_bias), 1, hidden, kv_dim)?;
+            let v = linear.forward(stream, &x_norm, &layer.v_proj_weight, Some(&layer.v_proj_bias), 1, hidden, kv_dim)?;
 
             // Apply RoPE
             apply_rope(&mut q, &mut k, pos, self.config.num_attention_heads, self.config.num_key_value_heads, self.config.head_dim(), self.config.rope_theta);
@@ -167,7 +177,7 @@ impl ModelWeights {
             }
 
             // Output projection
-            let attn_proj = matvec(&layer.o_proj_weight, &attn_out, hidden, q_dim);
+            let attn_proj = linear.forward(stream, &attn_out, &layer.o_proj_weight, None, 1, q_dim, hidden)?;
 
             // Residual connection
             for i in 0..hidden {
@@ -179,8 +189,8 @@ impl ModelWeights {
             let mlp_norm = rms_norm(&x, &layer.post_attention_layernorm, self.config.rms_norm_eps);
 
             let intermediate = self.config.intermediate_size;
-            let gate = matvec(&layer.gate_proj_weight, &mlp_norm, intermediate, hidden);
-            let up = matvec(&layer.up_proj_weight, &mlp_norm, intermediate, hidden);
+            let gate = linear.forward(stream, &mlp_norm, &layer.gate_proj_weight, None, 1, hidden, intermediate)?;
+            let up = linear.forward(stream, &mlp_norm, &layer.up_proj_weight, None, 1, hidden, intermediate)?;
 
             // SwiGLU activation
             let mut act = Vec::with_capacity(intermediate);
@@ -189,7 +199,7 @@ impl ModelWeights {
             }
 
             // Down projection
-            let mlp_out = matvec(&layer.down_proj_weight, &act, hidden, intermediate);
+            let mlp_out = linear.forward(stream, &act, &layer.down_proj_weight, None, 1, intermediate, hidden)?;
 
             for i in 0..hidden {
                 x[i] = mlp_residual[i] + mlp_out[i];
@@ -200,7 +210,7 @@ impl ModelWeights {
         let final_norm = rms_norm(&x, &self.norm, self.config.rms_norm_eps);
 
         // LM Head (tied with embeddings: [vocab_size, hidden])
-        matvec(&self.embed_tokens, &final_norm, self.config.vocab_size, hidden)
+        linear.forward(stream, &final_norm, &self.embed_tokens, None, 1, hidden, self.config.vocab_size)
     }
 }
 
@@ -214,34 +224,6 @@ fn rms_norm(x: &[f32], weight: &[f32], eps: f32) -> Vec<f32> {
     let ss: f32 = x.iter().map(|&v| v * v).sum::<f32>() / x.len() as f32;
     let inv_std = 1.0 / (ss + eps).sqrt();
     x.iter().zip(weight.iter()).map(|(&xi, &wi)| xi * inv_std * wi).collect()
-}
-
-#[inline(always)]
-fn matvec(w: &[f32], x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; rows];
-    for r in 0..rows {
-        let row_slice = &w[r * cols..(r + 1) * cols];
-        let mut sum = 0.0f32;
-        for c in 0..cols {
-            sum += row_slice[c] * x[c];
-        }
-        out[r] = sum;
-    }
-    out
-}
-
-#[inline(always)]
-fn matvec_bias(w: &[f32], b: &[f32], x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; rows];
-    for r in 0..rows {
-        let row_slice = &w[r * cols..(r + 1) * cols];
-        let mut sum = b[r];
-        for c in 0..cols {
-            sum += row_slice[c] * x[c];
-        }
-        out[r] = sum;
-    }
-    out
 }
 
 fn apply_rope(
