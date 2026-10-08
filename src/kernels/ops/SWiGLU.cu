@@ -6,6 +6,6 @@ extern "C" __global__ void SWiGLU(
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index < halfN) {
        float x = gate[index];
-       output[index] = x * (1.0f / (1.0f + __exp(-x))) * up[index];
+       output[index] = x * (1.0f / (1.0f + expf(-x))) * up[index];
     }
 }
