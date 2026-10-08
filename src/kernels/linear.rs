@@ -18,7 +18,12 @@ impl LinearKernel {
     }
 
     pub fn upload(&self, stream: &Arc<CudaStream>, values: &[f32], name: &str) -> Result<CudaSlice<f32>, String> {
-        stream.clone_htod(values).map_err(|e| format!("Uploading {name} to CUDA failed: {e}"))
+        // `clone_htod` queues an async transfer. The caller often passes a
+        // temporary Vec returned by SafeTensors, so keep its memory alive until
+        // the transfer has completed.
+        let device = stream.clone_htod(values).map_err(|e| format!("Uploading {name} to CUDA failed: {e}"))?;
+        stream.synchronize().map_err(|e| format!("Waiting for {name} upload failed: {e}"))?;
+        Ok(device)
     }
 
     pub fn forward(
