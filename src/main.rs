@@ -8,6 +8,7 @@ use clap::Parser;
 use config::QwenConfig;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::linear::LinearKernel;
+use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel};
 use model::{KVCache, ModelWeights};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
@@ -53,6 +54,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[2/5] Initializing CUDA Context on GPU {}...", selected_gpu);
     let (cuda_ctx, cuda_stream) = init_cuda_device(selected_gpu)?;
     let linear = LinearKernel::new(&cuda_ctx)?;
+    let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
+    let swiglu = SwiGluKernel::new(&cuda_ctx)?;
+    let attention = AttentionKernel::new(&cuda_ctx)?;
 
     // Test a quick device allocation to verify context is live
     let test_buf = vec![1.0f32, 2.0f32, 3.0f32, 4.0f32];
@@ -115,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prefill: process prompt tokens
     let prefill_start = std::time::Instant::now();
     for &tok in input_tokens {
-        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &cuda_stream)?;
+        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &cuda_stream)?;
         current_pos += 1;
 
         // Argmax on final prompt token to predict first response token
@@ -140,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &cuda_stream)?;
+        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &cuda_stream)?;
         current_pos += 1;
         next_token = argmax(&logits);
         gen_count += 1;

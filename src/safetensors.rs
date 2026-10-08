@@ -8,7 +8,7 @@ use std::path::Path;
 pub struct TensorMeta {
     pub dtype: String,
     pub shape: Vec<usize>,
-    pub data_offsets: [usize; 2],
+    pub data_offsets: [usize; 2], // start  , end 
 }
 
 pub struct SafeTensors {
@@ -90,6 +90,7 @@ impl SafeTensors {
             .map_err(|e| format!("Read failed for '{}': {}", name, e))?;
 
         match meta.dtype.as_str() {
+            // TODO : Dont just convert everyhting to F32 
             "BF16" => {
                 let count = byte_len / 2;
                 let mut data = Vec::with_capacity(count);

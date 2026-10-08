@@ -1,6 +1,7 @@
 use crate::config::QwenConfig;
 use crate::safetensors::SafeTensors;
 use crate::kernels::linear::LinearKernel;
+use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel};
 use cudarc::driver::CudaStream;
 use std::sync::Arc;
 
@@ -108,6 +109,9 @@ impl ModelWeights {
         pos: usize,
         cache: &mut KVCache,
         linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
         stream: &Arc<CudaStream>,
     ) -> Result<Vec<f32>, String> {
         let hidden = self.config.hidden_size;
@@ -122,7 +126,7 @@ impl ModelWeights {
             let residual = x.clone();
 
             // Input LayerNorm
-            let x_norm = rms_norm(&x, &layer.input_layernorm, self.config.rms_norm_eps);
+            let x_norm = rmsnorm.forward(stream, &x, &layer.input_layernorm, self.config.rms_norm_eps)?;
 
             // Self-Attention projections
             let q_dim = self.config.num_attention_heads * self.config.head_dim(); // 14 * 64 = 896
@@ -143,38 +147,18 @@ impl ModelWeights {
             let total_seq_len = layer_cache.k.len() / kv_dim;
 
             // Compute Multi-Head / Grouped-Query Attention
-            let num_q_heads = self.config.num_attention_heads;
             let num_kv_heads = self.config.num_key_value_heads;
             let head_dim = self.config.head_dim();
-            let heads_per_kv = num_q_heads / num_kv_heads; // 7
-
-            let scale = 1.0 / (head_dim as f32).sqrt();
-            let mut attn_out = vec![0.0f32; q_dim];
-
-            for h in 0..num_q_heads {
-                let kv_h = h / heads_per_kv;
-                let q_head = &q[h * head_dim..(h + 1) * head_dim];
-
-                // Attention scores for this head across all cached positions
-                let mut scores = Vec::with_capacity(total_seq_len);
-                for t in 0..total_seq_len {
-                    let k_head = &layer_cache.k[t * kv_dim + kv_h * head_dim..t * kv_dim + (kv_h + 1) * head_dim];
-                    let dot: f32 = q_head.iter().zip(k_head.iter()).map(|(&a, &b)| a * b).sum();
-                    scores.push(dot * scale);
-                }
-
-                // Softmax
-                softmax(&mut scores);
-
-                // Weighted sum over V
-                let out_head = &mut attn_out[h * head_dim..(h + 1) * head_dim];
-                for (t, &score) in scores.iter().enumerate() {
-                    let v_head = &layer_cache.v[t * kv_dim + kv_h * head_dim..t * kv_dim + (kv_h + 1) * head_dim];
-                    for i in 0..head_dim {
-                        out_head[i] += score * v_head[i];
-                    }
-                }
-            }
+            let attn_out = attention.forward(
+                stream,
+                &q,
+                &layer_cache.k,
+                &layer_cache.v,
+                total_seq_len,
+                self.config.num_attention_heads,
+                num_kv_heads,
+                head_dim,
+            )?;
 
             // Output projection
             let attn_proj = linear.forward(stream, &attn_out, &layer.o_proj_weight, None, 1, q_dim, hidden)?;
@@ -186,17 +170,14 @@ impl ModelWeights {
 
             // MLP block
             let mlp_residual = x.clone();
-            let mlp_norm = rms_norm(&x, &layer.post_attention_layernorm, self.config.rms_norm_eps);
+            let mlp_norm = rmsnorm.forward(stream, &x, &layer.post_attention_layernorm, self.config.rms_norm_eps)?;
 
             let intermediate = self.config.intermediate_size;
             let gate = linear.forward(stream, &mlp_norm, &layer.gate_proj_weight, None, 1, hidden, intermediate)?;
             let up = linear.forward(stream, &mlp_norm, &layer.up_proj_weight, None, 1, hidden, intermediate)?;
 
             // SwiGLU activation
-            let mut act = Vec::with_capacity(intermediate);
-            for i in 0..intermediate {
-                act.push(silu(gate[i]) * up[i]);
-            }
+            let act = swiglu.forward(stream, &gate, &up)?;
 
             // Down projection
             let mlp_out = linear.forward(stream, &act, &layer.down_proj_weight, None, 1, intermediate, hidden)?;
@@ -207,23 +188,11 @@ impl ModelWeights {
         }
 
         // Final RMSNorm
-        let final_norm = rms_norm(&x, &self.norm, self.config.rms_norm_eps);
+        let final_norm = rmsnorm.forward(stream, &x, &self.norm, self.config.rms_norm_eps)?;
 
         // LM Head (tied with embeddings: [vocab_size, hidden])
         linear.forward(stream, &final_norm, &self.embed_tokens, None, 1, hidden, self.config.vocab_size)
     }
-}
-
-#[inline(always)]
-fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
-}
-
-#[inline(always)]
-fn rms_norm(x: &[f32], weight: &[f32], eps: f32) -> Vec<f32> {
-    let ss: f32 = x.iter().map(|&v| v * v).sum::<f32>() / x.len() as f32;
-    let inv_std = 1.0 / (ss + eps).sqrt();
-    x.iter().zip(weight.iter()).map(|(&xi, &wi)| xi * inv_std * wi).collect()
 }
 
 fn apply_rope(
@@ -267,18 +236,3 @@ fn apply_rope(
     }
 }
 
-fn softmax(scores: &mut [f32]) {
-    if scores.is_empty() {
-        return;
-    }
-    let max_val = scores.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-    let mut sum = 0.0f32;
-    for s in scores.iter_mut() {
-        *s = (*s - max_val).exp();
-        sum += *s;
-    }
-    let inv_sum = 1.0 / sum;
-    for s in scores.iter_mut() {
-        *s *= inv_sum;
-    }
-}
