@@ -194,7 +194,8 @@ impl VectorKernels {
         let mut out = stream.alloc_zeros::<f32>(hidden).map_err(|e| format!("Allocating embedding output failed: {e}"))?;
         let mut launch = stream.launch_builder(&self.embed);
         launch.arg(table); launch.arg(&mut out); launch.arg(&token); launch.arg(&n);
-        unsafe { launch.launch(LaunchConfig { grid_dim: (1,1,1), block_dim:(THREADS,1,1), shared_mem_bytes:0 }) }.map_err(|e| format!("Launching embedding lookup failed: {e}"))?;
+        let grid = (hidden.div_ceil(THREADS as usize)) as u32;
+        unsafe { launch.launch(LaunchConfig { grid_dim: (grid,1,1), block_dim:(THREADS,1,1), shared_mem_bytes:0 }) }.map_err(|e| format!("Launching embedding lookup failed: {e}"))?;
         Ok(out)
     }
 
