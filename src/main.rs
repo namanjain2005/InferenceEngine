@@ -8,7 +8,7 @@ use clap::Parser;
 use config::QwenConfig;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::linear::LinearKernel;
-use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel};
+use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use model::{KVCache, ModelWeights};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
@@ -57,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
     let attention = AttentionKernel::new(&cuda_ctx)?;
+    let vector = VectorKernels::new(&cuda_ctx)?;
 
     // Test a quick device allocation to verify context is live
     let test_buf = vec![1.0f32, 2.0f32, 3.0f32, 4.0f32];
@@ -90,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   -> Safetensors opened: {} tensors in header.", st.tensors.len());
 
     let start_load = std::time::Instant::now();
-    let model = ModelWeights::load(&mut st, config.clone())?;
+    let model = ModelWeights::load(&mut st, config.clone(), &linear, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
     // 5. Run Inference
@@ -108,7 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_tokens = encoding.get_ids();
     println!("   Input token IDs ({} tokens): {:?}", input_tokens.len(), input_tokens);
 
-    let mut cache = KVCache::new(config.num_hidden_layers);
+    let max_seq_len = input_tokens.len().checked_add(args.max_tokens).ok_or("Requested sequence length overflow")?;
+    let kv_dim = config.num_key_value_heads.checked_mul(config.head_dim()).ok_or("KV dimension overflow")?;
+    let mut cache = KVCache::new(&cuda_stream, config.num_hidden_layers, max_seq_len, kv_dim)?;
     let mut current_pos = 0;
     let mut next_token = 0;
 
@@ -119,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prefill: process prompt tokens
     let prefill_start = std::time::Instant::now();
     for &tok in input_tokens {
-        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &cuda_stream)?;
+        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
         current_pos += 1;
 
         // Argmax on final prompt token to predict first response token
@@ -144,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &cuda_stream)?;
+        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
         current_pos += 1;
         next_token = argmax(&logits);
         gen_count += 1;

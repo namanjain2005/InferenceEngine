@@ -1,3 +1,3 @@
 mod kernels;
 
-pub use kernels::{AttentionKernel, RmsNormKernel, SwiGluKernel};
+pub use kernels::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
