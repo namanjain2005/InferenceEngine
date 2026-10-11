@@ -1,9 +1,10 @@
-// Simple fused decode-step attention kernel for Grouped-Query Attention.
+// Fused decode-step attention kernel. Supports MHA, GQA, and MQA through the
+// query-head and KV-head counts supplied by the caller.
 //
-// One block per query head.  Within the block:
-//   Phase 1 - threads cooperate to compute Q*K dot products (strided over seq positions).
+// One block handles one query head. Each warp handles a sequence position;
+// its lanes read contiguous key dimensions and reduce the Q*K dot product.
 //   Phase 2 - threads parallelize the softmax over the scores in shared memory.
-//   Phase 3 - threads cooperate to compute the score-weighted V sum (strided over head_dim).
+//   Phase 3 - threads read contiguous value dimensions for the weighted sum.
 //
 // Layout expected (matches the Rust KV-cache layout):
 //   q       [num_q_heads * head_dim] - query vector for current token
@@ -12,6 +13,8 @@
 //   output  [num_q_heads * head_dim] - attention output
 //
 // Dynamic shared memory: seq_len * sizeof(float) for the per-head score buffer.
+constexpr int WARP_SIZE = 32;
+
 extern "C" __global__ void attention_decode(
     const float* __restrict__ q,
     const float* __restrict__ k_cache,
@@ -26,19 +29,28 @@ extern "C" __global__ void attention_decode(
     extern __shared__ float scores[];
     __shared__ float reduction[256];
 
-    const int h    = blockIdx.x;
+    const int h = blockIdx.x;
     const int kv_h = h / heads_per_kv;
-    const int tid  = threadIdx.x;
+    const int tid = threadIdx.x;
+    const int lane = tid % WARP_SIZE;
+    const int warp = tid / WARP_SIZE;
+    const int warps_per_block = blockDim.x / WARP_SIZE;
 
     const float* q_head = q + h * head_dim;
 
-    // ======== Phase 1: Q*K dot products ========
-    for (int t = tid; t < seq_len; t += blockDim.x) {
-        float dot = 0.0f;
+    // Each warp owns one token at a time. Lanes walk adjacent head dimensions,
+    // so every iteration reads a contiguous segment from the key cache.
+    for (int t = warp; t < seq_len; t += warps_per_block) {
         const float* k_ptr = k_cache + t * kv_dim + kv_h * head_dim;
-        for (int d = 0; d < head_dim; d++)
+        float dot = 0.0f;
+        for (int d = lane; d < head_dim; d += WARP_SIZE)
             dot = fmaf(q_head[d], k_ptr[d], dot);
-        scores[t] = dot * scale;
+
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+            dot += __shfl_down_sync(0xffffffff, dot, offset);
+
+        if (lane == 0)
+            scores[t] = dot * scale;
     }
     __syncthreads();
 
