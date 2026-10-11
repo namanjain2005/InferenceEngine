@@ -6,13 +6,17 @@ mod safetensors;
 
 use clap::Parser;
 use config::QwenConfig;
+use cudarc::driver::CudaStream;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::linear::LinearKernel;
 use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use model::{KVCache, ModelWeights};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokenizers::Tokenizer;
+
+const BASE_PROMPT_TEXT: &str = include_str!("../BASE_PROMPTS.txt");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Minimal Qwen2.5-0.5B-Instruct Inference Engine in Rust from Scratch")]
@@ -28,9 +32,9 @@ struct Args {
     )]
     model_dir: PathBuf,
 
-    /// Text prompt to run inference on
-    #[arg(long, default_value = "Hello! Tell me who you are in one sentence.")]
-    prompt: String,
+    /// Run one custom prompt instead of the built-in prompt suite
+    #[arg(long)]
+    prompt: Option<String>,
 
     /// Maximum tokens to generate
     #[arg(long, default_value_t = 20)]
@@ -94,84 +98,184 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = ModelWeights::load(&mut st, config.clone(), &linear, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
-    // 5. Run Inference
-    println!("\n[5/5] Running Inference on Prompt:");
-    println!("   Prompt: \"{}\"\n", args.prompt);
-
-    // Format prompt with Qwen instruct template
-    let formatted_prompt = format!(
-        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        args.prompt
-    );
-
-    let encoding = tokenizer.encode(formatted_prompt.as_str(), false)
-        .map_err(|e| format!("Tokenization failed: {}", e))?;
-    let input_tokens = encoding.get_ids();
-    println!("   Input token IDs ({} tokens): {:?}", input_tokens.len(), input_tokens);
-
-    let max_seq_len = input_tokens.len().checked_add(args.max_tokens).ok_or("Requested sequence length overflow")?;
-    let kv_dim = config.num_key_value_heads.checked_mul(config.head_dim()).ok_or("KV dimension overflow")?;
-    let mut cache = KVCache::new(&cuda_stream, config.num_hidden_layers, max_seq_len, kv_dim)?;
-    let mut current_pos = 0;
-    let mut next_token = 0;
-
-    print!("\n--- Generated Output ---\n");
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-
-    // Prefill: process prompt tokens
-    let prefill_start = std::time::Instant::now();
-    for &tok in input_tokens {
-        let logits = model.forward_token(tok as usize, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
-        current_pos += 1;
-
-        // Argmax on final prompt token to predict first response token
-        if current_pos == input_tokens.len() {
-            next_token = argmax(&logits);
-        }
-    }
-    let prefill_time = prefill_start.elapsed();
-
-    // Decode first token
-    if let Ok(piece) = tokenizer.decode(&[next_token as u32], false) {
-        print!("{}", piece);
-        let _ = std::io::stdout().flush();
+    // 5. Run the full built-in suite unless a one-off prompt was supplied.
+    let prompts = match args.prompt {
+        Some(prompt) => vec![("Custom prompt".to_string(), prompt)],
+        None => base_prompts(),
+    };
+    if prompts.is_empty() {
+        return Err("No prompts found in BASE_PROMPTS.txt".into());
     }
 
-    // Autoregressive generation loop
-    let gen_start = std::time::Instant::now();
-    let mut gen_count = 1;
-
-    for _ in 1..args.max_tokens {
-        if next_token == config.eos_token_id || next_token == 151645 || next_token == 151643 {
-            break;
-        }
-
-        let logits = model.forward_token(next_token, current_pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
-        current_pos += 1;
-        next_token = argmax(&logits);
-        gen_count += 1;
-
-        if let Ok(piece) = tokenizer.decode(&[next_token as u32], false) {
-            print!("{}", piece);
-            let _ = std::io::stdout().flush();
-        }
+    println!("\n[5/5] Running {} prompt(s)...", prompts.len());
+    for (index, (label, prompt)) in prompts.iter().enumerate() {
+        run_prompt(
+            index + 1,
+            prompts.len(),
+            label,
+            prompt,
+            args.max_tokens,
+            &tokenizer,
+            &config,
+            &model,
+            &linear,
+            &rmsnorm,
+            &swiglu,
+            &attention,
+            &vector,
+            &cuda_stream,
+        )?;
     }
-    println!("\n------------------------\n");
-
-    println!(
-        "Performance: Prefill ({} tokens) in {:.2?}, Generated {} tokens in {:.2?} ({:.2} tok/s)",
-        input_tokens.len(),
-        prefill_time,
-        gen_count,
-        gen_start.elapsed(),
-        gen_count as f64 / gen_start.elapsed().as_secs_f64()
-    );
 
     println!("\n============================================================");
     println!(" Inference finished successfully on GPU {}!", selected_gpu);
     println!("============================================================");
 
+    Ok(())
+}
+
+fn base_prompts() -> Vec<(String, String)> {
+    let mut prompts = Vec::new();
+    let mut label: Option<String> = None;
+    let mut body = String::new();
+
+    for line in BASE_PROMPT_TEXT.lines() {
+        let trimmed = line.trim();
+        if let Some(next_label) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            if let Some(previous_label) = label.replace(next_label.to_string()) {
+                let prompt = body.trim().to_string();
+                if !prompt.is_empty() {
+                    prompts.push((previous_label, prompt));
+                }
+            }
+            body.clear();
+        } else if label.is_some() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+
+    if let Some(final_label) = label {
+        let prompt = body.trim().to_string();
+        if !prompt.is_empty() {
+            prompts.push((final_label, prompt));
+        }
+    }
+
+    prompts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_prompt(
+    index: usize,
+    total: usize,
+    label: &str,
+    prompt: &str,
+    max_tokens: usize,
+    tokenizer: &Tokenizer,
+    config: &QwenConfig,
+    model: &ModelWeights,
+    linear: &LinearKernel,
+    rmsnorm: &RmsNormKernel,
+    swiglu: &SwiGluKernel,
+    attention: &AttentionKernel,
+    vector: &VectorKernels,
+    stream: &Arc<CudaStream>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n--- Prompt {index}/{total}: {label} ---");
+
+    let formatted_prompt = format!(
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        prompt
+    );
+    let encoding = tokenizer
+        .encode(formatted_prompt.as_str(), false)
+        .map_err(|e| format!("Tokenization failed: {e}"))?;
+    let input_tokens = encoding.get_ids();
+    if input_tokens.is_empty() {
+        return Err(format!("Prompt {label} produced no input tokens").into());
+    }
+    println!("Input tokens: {}", input_tokens.len());
+
+    let max_seq_len = input_tokens
+        .len()
+        .checked_add(max_tokens)
+        .ok_or("Requested sequence length overflow")?;
+    let kv_dim = config
+        .num_key_value_heads
+        .checked_mul(config.head_dim())
+        .ok_or("KV dimension overflow")?;
+    let mut cache = KVCache::new(stream, config.num_hidden_layers, max_seq_len, kv_dim)?;
+    let mut current_pos = 0;
+    let mut first_token = None;
+
+    let prefill_start = std::time::Instant::now();
+    for &token in input_tokens {
+        let logits = model.forward_token(
+            token as usize,
+            current_pos,
+            &mut cache,
+            linear,
+            rmsnorm,
+            swiglu,
+            attention,
+            vector,
+            stream,
+        )?;
+        current_pos += 1;
+        first_token = Some(argmax(&logits));
+    }
+    let prefill_time = prefill_start.elapsed();
+
+    let mut next_token = first_token.ok_or("Prompt prefill produced no logits")?;
+    let mut generated_tokens = Vec::with_capacity(max_tokens);
+    let mut decode_steps = 0usize;
+    let generation_start = std::time::Instant::now();
+    for generated_count in 0..max_tokens {
+        if next_token == config.eos_token_id || next_token == 151645 || next_token == 151643 {
+            break;
+        }
+        generated_tokens.push(next_token as u32);
+        if generated_count + 1 == max_tokens {
+            break;
+        }
+
+        let logits = model.forward_token(
+            next_token,
+            current_pos,
+            &mut cache,
+            linear,
+            rmsnorm,
+            swiglu,
+            attention,
+            vector,
+            stream,
+        )?;
+        decode_steps += 1;
+        current_pos += 1;
+        next_token = argmax(&logits);
+    }
+    let generation_time = generation_start.elapsed();
+
+    let response = tokenizer
+        .decode(&generated_tokens, false)
+        .map_err(|e| format!("Output decoding failed: {e}"))?;
+    println!("Output: {response}");
+    let generated_count = generated_tokens.len();
+    let tokens_per_second = if generation_time.as_secs_f64() > 0.0 {
+        decode_steps as f64 / generation_time.as_secs_f64()
+    } else {
+        0.0
+    };
+    println!(
+        "Timing: prefill {} tokens in {:.2?}; generated {} tokens with {} decode steps in {:.2?} ({:.2} decode tok/s)",
+        input_tokens.len(),
+        prefill_time,
+        generated_count,
+        decode_steps,
+        generation_time,
+        tokens_per_second
+    );
     Ok(())
 }
 
