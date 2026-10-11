@@ -57,7 +57,11 @@ impl LinearKernel {
         launch.arg(input); launch.arg(weights); launch.arg(bias); launch.arg(&mut output);
         launch.arg(&batch); launch.arg(&input_n); launch.arg(&output_n);
         let threads = 256u32;
-        let cfg = LaunchConfig { grid_dim: ((output_len + threads as usize - 1) as u32 / threads, 1, 1), block_dim: (threads, 1, 1), shared_mem_bytes: 0 };
+        let outputs_per_block = threads as usize / 32;
+        let blocks_per_row = out_features.div_ceil(outputs_per_block);
+        let grid_x = batch.checked_mul(blocks_per_row).ok_or("Linear grid size overflow")?;
+        let grid_x = u32::try_from(grid_x).map_err(|_| "Linear grid exceeds CUDA launch range")?;
+        let cfg = LaunchConfig { grid_dim: (grid_x, 1, 1), block_dim: (threads, 1, 1), shared_mem_bytes: 0 };
         unsafe { launch.launch(cfg) }.map_err(|e| format!("Launching linear CUDA kernel failed: {e}"))?;
         Ok(output)
     }
