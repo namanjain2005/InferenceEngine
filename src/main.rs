@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n[5/5] Running {} prompt(s)...", prompts.len());
     for (index, (label, prompt)) in prompts.iter().enumerate() {
-        run_prompt(
+        if let Err(error) = run_prompt(
             index + 1,
             prompts.len(),
             label,
@@ -124,7 +124,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &attention,
             &vector,
             &cuda_stream,
-        )?;
+        ) {
+            return Err(format!("Prompt '{label}' failed: {error}").into());
+        }
     }
 
     println!("\n============================================================");
@@ -260,7 +262,11 @@ fn run_prompt(
     let response = tokenizer
         .decode(&generated_tokens, false)
         .map_err(|e| format!("Output decoding failed: {e}"))?;
-    println!("Output: {response}");
+    println!("Generated output:\n{response}");
+    if response.trim().is_empty() {
+        println!("[No text was generated]");
+    }
+    println!("--- End generated output ---");
     let generated_count = generated_tokens.len();
     let tokens_per_second = if generation_time.as_secs_f64() > 0.0 {
         decode_steps as f64 / generation_time.as_secs_f64()
