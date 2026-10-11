@@ -1,15 +1,16 @@
-Attention kernel comparison prompts
+Text generation and attention-kernel comparison prompts
 
-Use the same generation settings for each prompt. The contexts increase in length
-while the requested response stays short, helping separate prompt-length effects
-from variation in generated output.
+The contexts increase in length, and each prompt asks for a concise, meaningful
+answer. These are useful for checking readable generation as well as comparing
+how prompt length affects prefill time. Answers can vary in length, so compare
+prefill and decode timings separately.
 
 [1 - Tiny context]
-Reply with exactly one word: READY.
+What is 7 + 5? Answer in one complete sentence.
 
 [2 - Short context]
-This is a short attention-kernel comparison prompt. Do not explain or add
-punctuation. Reply with exactly one word: READY.
+Changing one kernel detail at a time can make a performance experiment easier to
+understand. Why? Answer in one complete sentence.
 
 [3 - Medium context]
 Read the passage, then follow the instruction at the end.
@@ -23,7 +24,7 @@ be compared fairly. A useful experiment changes one implementation detail at a
 time and keeps the workload fixed. This makes it easier to identify which change
 caused an improvement or regression.
 
-Reply with exactly one word: READY.
+Summarize the main idea of the passage in two short sentences.
 
 [4 - Long context]
 Read the passage, then follow the instruction at the end.
@@ -50,7 +51,7 @@ find the maximum score and the sum of exponentials. Measuring one optimization
 at a time helps show whether coalesced reads or parallel reductions improve the
 actual workload.
 
-Reply with exactly one word: READY.
+Based on the passage, explain grouped-query attention in two short sentences.
 
 [5 - Long context with repeated structure]
 Read the passage, then follow the instruction at the end.
@@ -70,4 +71,5 @@ the cached values. Changing the thread layout can improve memory transactions,
 but the result should still match the same attention calculation. Context size
 is therefore an important workload dimension when comparing kernel versions.
 
-Reply with exactly one word: READY.
+According to the passage, what does the key-value cache save the model from
+recomputing? Answer in one complete sentence.

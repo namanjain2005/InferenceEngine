@@ -37,7 +37,7 @@ struct Args {
     prompt: Option<String>,
 
     /// Maximum tokens to generate
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = 48)]
     max_tokens: usize,
 }
 
