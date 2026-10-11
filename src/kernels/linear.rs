@@ -52,10 +52,10 @@ impl LinearKernel {
             None => { bias_zeros = stream.alloc_zeros::<f32>(out_features).map_err(|e| format!("Allocating linear zero bias failed: {e}"))?; &bias_zeros }
         };
         let mut output = stream.alloc_zeros::<f32>(output_len).map_err(|e| format!("Allocating linear output failed: {e}"))?;
-        let (batch, input_n, output_n) = (batch as i32, in_features as i32, out_features as i32);
+        let (batch_i32, input_n, output_n) = (batch as i32, in_features as i32, out_features as i32);
         let mut launch = stream.launch_builder(&self.function);
         launch.arg(input); launch.arg(weights); launch.arg(bias); launch.arg(&mut output);
-        launch.arg(&batch); launch.arg(&input_n); launch.arg(&output_n);
+        launch.arg(&batch_i32); launch.arg(&input_n); launch.arg(&output_n);
         let threads = 256u32;
         let outputs_per_block = threads as usize / 32;
         let blocks_per_row = out_features.div_ceil(outputs_per_block);
