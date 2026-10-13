@@ -45,6 +45,22 @@ pub trait ModelBackend {
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String>;
+    /// Token-at-a-time forward without the final norm/logits projection.
+    /// Returns the last residual stream vector. Used for prefill positions
+    /// whose logits are discarded, so the loop baseline does the same work
+    /// as the batched paths (which project only the last row).
+    fn forward_token_hidden(
+        &self,
+        token_id: usize,
+        pos: usize,
+        cache: &mut Self::Cache,
+        linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String>;
     /// Batched prefill over `tokens` at cache positions
     /// `[start_pos, start_pos + tokens.len())`. Fills the KV cache and returns
     /// logits for the last prompt token only. `use_gemm` selects the blocked
@@ -151,25 +167,12 @@ impl Qwen2Model {
             norm,
         })
     }
-}
 
-impl ModelBackend for Qwen2Model {
-    type Cache = KVCache;
+    /// Shared token-at-a-time body through the last residual stream vector.
+    /// `forward_token` adds the final norm + vocab projection;
+    /// `forward_token_hidden` returns the residual directly.
 
-    fn config(&self) -> &ModelConfig {
-        &self.config
-    }
-
-    fn new_cache(&self, stream: &Arc<CudaStream>, capacity: usize) -> Result<Self::Cache, String> {
-        let kv_dim = self
-            .config
-            .num_key_value_heads
-            .checked_mul(self.config.head_dim())
-            .ok_or("KV dimension overflow")?;
-        KVCache::new(stream, self.config.num_hidden_layers, capacity, kv_dim)
-    }
-
-    fn forward_token(
+    fn forward_core(
         &self,
         token_id: usize,
         pos: usize,
@@ -302,6 +305,41 @@ impl ModelBackend for Qwen2Model {
             )?;
             x = vector.add(stream, &x, &mlp_out)?;
         }
+        Ok(x)
+    }
+
+}
+
+impl ModelBackend for Qwen2Model {
+    type Cache = KVCache;
+
+    fn config(&self) -> &ModelConfig {
+        &self.config
+    }
+
+    fn new_cache(&self, stream: &Arc<CudaStream>, capacity: usize) -> Result<Self::Cache, String> {
+        let kv_dim = self
+            .config
+            .num_key_value_heads
+            .checked_mul(self.config.head_dim())
+            .ok_or("KV dimension overflow")?;
+        KVCache::new(stream, self.config.num_hidden_layers, capacity, kv_dim)
+    }
+
+    fn forward_token(
+        &self,
+        token_id: usize,
+        pos: usize,
+        cache: &mut KVCache,
+        linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String> {
+        let hidden = self.config.hidden_size;
+        let x = self.forward_core(token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
         let final_norm = rmsnorm.forward(stream, &x, &self.norm, self.config.rms_norm_eps)?;
         let logits = linear.forward(
             stream,
@@ -313,6 +351,21 @@ impl ModelBackend for Qwen2Model {
             self.config.vocab_size,
         )?;
         Ok(logits)
+    }
+
+    fn forward_token_hidden(
+        &self,
+        token_id: usize,
+        pos: usize,
+        cache: &mut KVCache,
+        linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.forward_core(token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)
     }
 
     fn forward_prefill(

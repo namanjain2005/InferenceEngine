@@ -58,6 +58,11 @@ struct Args {
     /// baseline, and print a timing comparison before decoding.
     #[arg(long, default_value_t = false)]
     bench_prefill: bool,
+
+    /// Repetitions per prefill path in bench mode; the median is reported.
+    /// Catches machine noise on shared GPUs.
+    #[arg(long, default_value_t = 3)]
+    bench_repeat: usize,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -158,6 +163,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = Qwen2Model::load(&mut st, config.clone(), &linear, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
+    // Warmup: run every prefill path once on throwaway caches so timed runs
+    // don't pay first-launch clock/cache ramp. Decode still uses GEMV only.
+    {
+        let mut cache = model.new_cache(&cuda_stream, 4)?;
+        let tiny = vec![config.bos_token_id, config.bos_token_id];
+        // Token loop warmup (last-logits form, same as the timed baseline).
+        for (pos, &tok) in tiny.iter().enumerate() {
+            if pos + 1 < tiny.len() {
+                model.forward_token_hidden(tok, pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+            } else {
+                model.forward_token(tok, pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+            }
+        }
+        let mut cache_b = model.new_cache(&cuda_stream, 4)?;
+        let _ = model.forward_prefill(&tiny, 0, &mut cache_b, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
+        let mut cache_g = model.new_cache(&cuda_stream, 4)?;
+        let _ = model.forward_prefill(&tiny, 0, &mut cache_g, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
+        cuda_stream.synchronize().map_err(|e| format!("Warmup synchronize failed: {e}"))?;
+        println!("   -> Warmup (all prefill paths) done.");
+    }
+
     // 5. Run the full built-in suite unless a one-off prompt was supplied.
     let prompts = match args.prompt {
         Some(prompt) => vec![("Custom prompt".to_string(), prompt)],
@@ -181,6 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.max_tokens,
             &prefill,
             args.bench_prefill,
+            args.bench_repeat.max(1),
             &tokenizer,
             &model,
             &argmax,
@@ -242,6 +269,7 @@ fn run_prompt<M: ModelBackend>(
     max_tokens: usize,
     prefill_mode: &str,
     bench_prefill: bool,
+    bench_repeat: usize,
     tokenizer: &Tokenizer,
     model: &M,
     argmax: &ArgmaxKernel,
@@ -274,15 +302,18 @@ fn run_prompt<M: ModelBackend>(
         .ok_or("Requested sequence length overflow")?;
     let host_tokens: Vec<usize> = input_tokens.iter().map(|&t| t as usize).collect();
 
-    // Prefill helpers. The token-loop is the baseline kept from main;
-    // the batched paths share the same resident weights.
+    // Prefill helpers. The token-loop baseline projects logits for the last
+    // token only (via forward_token_hidden for the rest), matching the work
+    // the batched paths do; the previous system computed throwaway logits
+    // per token, which the `main`-branch column still measures as-shipped.
     let prefill_loop = |cache: &mut M::Cache| -> Result<(cudarc::driver::CudaSlice<f32>, std::time::Duration), String> {
         let start = std::time::Instant::now();
         let mut last = None;
         for (pos, &tok) in host_tokens.iter().enumerate() {
-            let logits = model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
-            if pos + 1 == host_tokens.len() {
-                last = Some(logits);
+            if pos + 1 < host_tokens.len() {
+                model.forward_token_hidden(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
+            } else {
+                last = Some(model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?);
             }
         }
         stream.synchronize().map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
@@ -294,15 +325,36 @@ fn run_prompt<M: ModelBackend>(
         stream.synchronize().map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
         Ok((logits, start.elapsed()))
     };
+    /// Median of `n` timed runs on fresh caches.
+    let median_of = |mut dts: Vec<std::time::Duration>| -> std::time::Duration {
+        dts.sort();
+        dts[dts.len() / 2]
+    };
 
     let mut cache = model.new_cache(stream, max_seq_len)?;
     let (prefill_time, mut next_token) = if bench_prefill {
+        let reps = bench_repeat;
+        // Kept run per path: logits for the diff check + cache for decode.
         let mut cache_loop = model.new_cache(stream, max_seq_len)?;
         let mut cache_bgemv = model.new_cache(stream, max_seq_len)?;
         let mut cache_gemm = model.new_cache(stream, max_seq_len)?;
-        let (logits_loop, dt_loop) = prefill_loop(&mut cache_loop)?;
-        let (logits_bgemv, dt_bgemv) = prefill_batched(&mut cache_bgemv, false)?;
-        let (logits_gemm, dt_gemm) = prefill_batched(&mut cache_gemm, true)?;
+        let (logits_loop, _) = prefill_loop(&mut cache_loop)?;
+        let (logits_bgemv, _) = prefill_batched(&mut cache_bgemv, false)?;
+        let (logits_gemm, _) = prefill_batched(&mut cache_gemm, true)?;
+        // Timed medians with fresh caches (interleaved round-robin so a
+        // slow drift of machine state can't systematically favor one path).
+        let mut loop_dts = Vec::with_capacity(reps);
+        let mut bgemv_dts = Vec::with_capacity(reps);
+        let mut gemm_dts = Vec::with_capacity(reps);
+        for _ in 0..reps {
+            let mut c = model.new_cache(stream, max_seq_len)?;
+            loop_dts.push(prefill_loop(&mut c)?.1);
+            let mut c = model.new_cache(stream, max_seq_len)?;
+            bgemv_dts.push(prefill_batched(&mut c, false)?.1);
+            let mut c = model.new_cache(stream, max_seq_len)?;
+            gemm_dts.push(prefill_batched(&mut c, true)?.1);
+        }
+        let (dt_loop, dt_bgemv, dt_gemm) = (median_of(loop_dts), median_of(bgemv_dts), median_of(gemm_dts));
         let host_loop = stream.clone_dtoh(&logits_loop).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
         let host_bgemv = stream.clone_dtoh(&logits_bgemv).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
         let host_gemm = stream.clone_dtoh(&logits_gemm).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;

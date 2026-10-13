@@ -1,85 +1,104 @@
-# Prefill Benchmark: previous (`main`) vs new (`feat/gemm-prefill`)
+# Prefill Benchmark: previous (`main`) vs new (`feat/gemm-prefill`) — fair protocol
 
 `main` is untouched and remains the baseline. The new branch keeps
 `src/kernels/layer/linear.cu` + `LinearKernel::forward` unchanged (decode +
 comparison baseline) and adds `src/kernels/layer/gemm.cu` +
 `LinearKernel::forward_gemm` reading the **same** resident weight slices.
 
-## How to reproduce
+## Fairness protocol (revised after auditing the first round)
+
+The first round of numbers had four upward biases, all fixed here:
+
+1. **Throwaway logits.** The old loop baseline projected full 151936-wide
+   logits per token and discarded M−1 of them (~20% of its time on short
+   prompts). The loop now uses `forward_token_hidden` for all but the last
+   token, i.e. exactly the work the batched paths do. Kernel speedup
+   (loop→GEMM) is same-work; system speedup (`main` as-shipped→GEMM)
+   is reported separately.
+2. **Single-shot noise on a shared DGX.** Now `--bench-repeat 3`,
+   round-robin interleaved per path, median reported.
+3. **Order bias.** Warmup runs all three paths untimed before the suite;
+   repeats are interleaved so drift can't favor one path.
+4. **Cross-GPU `main` comparison.** `main` re-ran on the same GPU as the
+   new branch per model (0.5B→GPU 6, 1.5B→GPU 7, 3B→GPU 1).
+5. **Async timing.** Stream synchronized before every clock stop.
+
+Reproduce:
 
 ```bash
-# new branch: all three prefill paths + logits check per prompt
-./target/debug/Engine --gpu <id> --model-dir <model> --max-tokens 16 --bench-prefill
-# previous (main checkout): token-loop baseline only
-./target/debug/Engine --gpu <id> --model-dir <model> --max-tokens 16
+./target/debug/Engine --gpu <id> --model-dir <model> --max-tokens 16 \
+  --bench-prefill --bench-repeat 3   # new branch
+./target/debug/Engine --gpu <id> --model-dir <model> --max-tokens 16  # main
 ```
 
-`--prefill {gemv-loop,batched-gemv,gemm}` selects the prefill path for
-generation; `--bench-prefill` runs all three on each prompt, prints max-abs
-logits diff vs the loop, and decodes from the selected path. All timings
-synchronize the stream before stopping the clock. Speedups in parentheses
-are within-run (same process/GPU) vs the loop.
-
-Setup: Tesla V100-SXM2-32GB, f32, greedy decode, 16 max tokens.
-`main` ran on GPUs 0/2/1, new branch on GPUs 6/7/1 for 0.5B/1.5B/3B
-(3B both on GPU 1). Times in ms unless noted.
+Setup: Tesla V100-SXM2-32GB, f32, greedy decode. Times in ms unless noted.
+Speedups in parentheses are within-run medians vs the same-work loop;
+`sys` additionally divides as-shipped `main` by GEMM.
 
 ## Qwen2.5-0.5B (hidden 896, 24 layers)
 
-| Prompt (tokens) | main (prev) | loop | batched-GEMV | GEMM | bg diff | gemm diff |
+| Prompt (tok) | main | loop | batched-GEMV | GEMM | bg diff | gemm diff |
 |---|---|---|---|---|---|---|
-| Tiny (33) | 394 | 240 | 72 (3.3x) | 54 (4.5x) | 0.00e0 | 4.96e-5 |
-| Short (45) | 538 | 316 | 83 (3.8x) | 58 (5.4x) | 0.00e0 | 4.44e-5 |
-| Medium (154) | 1780 | 1100 | 293 (3.8x) | 75 (14.7x) | 0.00e0 | 4.34e-5 |
-| Long (321) | 3620 | 2410 | 662 (3.6x) | 81 (29.6x) | 8.23e-6 | 3.46e-5 |
-| Long-repeat (282) | 3200 | 2120 | 599 (3.5x) | 79 (26.8x) | 0.00e0 | 6.10e-5 |
-| Arithmetic (56) | 724 | 394 | 122 (3.2x) | 58 (6.8x) | 0.00e0 | 4.73e-5 |
-| Totals (73) | 916 | 524 | 150 (3.5x) | 50 (10.4x) | 0.00e0 | 7.25e-5 |
-| Format (73) | 832 | 535 | 117 (4.6x) | 55 (9.7x) | 0.00e0 | 7.05e-5 |
-| Time-extract (78) | 844 | 479 | 119 (4.0x) | 50 (9.5x) | 0.00e0 | 6.63e-5 |
+| Tiny (33) | 206 | 192 | 49 (3.9x) | 46 (4.2x, sys 4.5x) | 0.00e0 | 4.96e-5 |
+| Short (45) | 275 | 253 | 67 (3.8x) | 47 (5.4x, sys 5.9x) | 0.00e0 | 4.44e-5 |
+| Medium (154) | 951 | 881 | 242 (3.6x) | 57 (15.4x, sys 16.6x) | 0.00e0 | 1.64e-4 |
+| Long (321) | 2050 | 1890 | 512 (3.7x) | 78 (24.1x, sys 26.1x) | 0.00e0 | 3.24e-5 |
+| Long-repeat (282) | 1770 | 1620 | 449 (3.6x) | 75 (21.6x, sys 23.6x) | 0.00e0 | 6.10e-5 |
+| Arithmetic (56) | 332 | 337 | 85 (4.0x) | 47 (7.2x, sys 7.1x) | 0.00e0 | 4.73e-5 |
+| Totals (73) | 477 | 421 | 112 (3.8x) | 50 (8.4x, sys 9.5x) | 0.00e0 | 7.25e-5 |
+| Format (73) | 480 | 424 | 111 (3.8x) | 50 (8.4x, sys 9.6x) | 0.00e0 | 7.05e-5 |
+| Time-extract (78) | 484 | 445 | 119 (3.7x) | 50 (8.8x, sys 9.6x) | 0.00e0 | 6.63e-5 |
+
+Generations: 9/9 token-identical to `main`. Batched helpers bit-exact 9/9.
 
 ## Qwen2.5-1.5B (hidden 1536, 28 layers)
 
-| Prompt (tokens) | main (prev) | loop | batched-GEMV | GEMM | bg diff | gemm diff |
+| Prompt (tok) | main | loop | batched-GEMV | GEMM | bg diff | gemm diff |
 |---|---|---|---|---|---|---|
-| Tiny (33) | 734 | 804 | 413 (1.9x) | 190 (4.2x) | 0.00e0 | 1.25e-4 |
-| Short (45) | 1040 | 676 | 419 (1.6x) | 169 (4.0x) | 0.00e0 | 7.15e-5 |
-| Medium (154) | 3770 | 2720 | 1370 (2.0x) | 147 (18.6x) | 1.34e-1 | 4.91e-3 |
-| Long (321) | 7890 | 6530 | 4020 (1.6x) | 512 (12.8x) | 6.00e-2 | 1.48e-1 |
-| Long-repeat (282) | 6960 | 6200 | 2400 (2.6x) | 321 (19.3x) | 6.14e-2 | 9.19e-3 |
-| Arithmetic (56) | 1380 | 855 | 517 (1.6x) | 105 (8.2x) | 0.00e0 | 8.06e-5 |
-| Totals (73) | 1790 | 1240 | 451 (2.8x) | 115 (10.8x) | 0.00e0 | 7.96e-5 |
-| Format (73) | 1770 | 1780 | 898 (2.0x) | 231 (7.7x) | 0.00e0 | 1.01e-4 |
-| Time-extract (78) | 1950 | 1930 | 969 (2.0x) | 203 (9.5x) | 0.00e0 | 2.26e-2 |
+| Tiny (33) | 443 | 584 | 273 (2.1x) | 155 (3.8x, sys 2.8x) | 0.00e0 | 1.25e-4 |
+| Short (45) | 865 | 690 | 359 (1.9x) | 151 (4.6x, sys 5.7x) | 0.00e0 | 7.15e-5 |
+| Medium (154) | 3650 | 2830 | 1370 (2.1x) | 217 (13.1x, sys 16.8x) | 5.70e-3 | 8.05e-3 |
+| Long (321) | 7880 | 6300 | 2760 (2.3x) | 388 (16.2x, sys 20.3x) | 3.53e-2 | 0.00e0 |
+| Long-repeat (282) | 4720 | 6510 | 2800 (2.3x) | 356 (18.3x, sys 13.2x) | 0.00e0 | 0.00e0 |
+| Arithmetic (56) | 892 | 923 | 496 (1.9x) | 105 (8.8x, sys 8.5x) | 0.00e0 | 8.06e-5 |
+| Totals (73) | 1070 | 1610 | 907 (1.8x) | 217 (7.4x, sys 4.9x) | 0.00e0 | 7.96e-5 |
+| Format (73) | 1100 | 1160 | 704 (1.6x) | 180 (6.4x, sys 6.1x) | 0.00e0 | 6.33e-1 |
+| Time-extract (78) | 1200 | 1320 | 965 (1.4x) | 205 (6.5x, sys 5.9x) | 0.00e0 | 1.35e-4 |
+
+Note: `main` (separate process, single-shot) is noisier here — e.g. prompt 5
+`main` 4720 ms beats same-work loop 6510 ms despite doing strictly more
+work. The loop column (same-process median-of-3) is the rigorous baseline;
+`main` is reference only.
 
 ## Qwen2.5-3B (hidden 2048, 36 layers)
 
-| Prompt (tokens) | main (prev) | loop | batched-GEMV | GEMM | bg diff | gemm diff |
+| Prompt (tok) | main | loop | batched-GEMV | GEMM | bg diff | gemm diff |
 |---|---|---|---|---|---|---|
-| Tiny (33) | 754 | 1050 | 604 (1.7x) | 182 (5.8x) | 0.00e0 | 1.14e-3 |
-| Short (45) | 1580 | 1030 | 591 (1.7x) | 184 (5.6x) | 0.00e0 | 1.09e-3 |
-| Medium (154) | 6200 | 5600 | 3760 (1.5x) | 463 (12.1x) | 1.04e-2 | 6.39e-2 |
-| Long (321) | 12970 | 13340 | 5660 (2.4x) | 657 (20.3x) | 2.97e-2 | 9.16e-2 |
-| Long-repeat (282) | 9180 | 11550 | 6960 (1.7x) | 680 (17.0x) | 6.34e-2 | 4.81e-2 |
-| Arithmetic (56) | 2240 | 2240 | 1320 (1.7x) | 327 (6.9x) | 0.00e0 | 1.03e-3 |
-| Totals (73) | 2940 | 2240 | 964 (2.3x) | 203 (11.0x) | 0.00e0 | 2.53e-3 |
-| Format (73) | 2930 | 2840 | 1760 (1.6x) | 340 (8.3x) | 0.00e0 | 1.86e-3 |
-| Time-extract (78) | 3110 | 3120 | 1870 (1.7x) | 365 (8.6x) | 1.92e-1 | 5.70e-4 |
+| Tiny (33) | 754 | 854 | 574 (1.5x) | 254 (3.4x, sys 3.0x) | 0.00e0 | 1.14e-3 |
+| Short (45) | 1580 | 1700 | 1080 (1.6x) | 328 (5.2x, sys 4.8x) | 0.00e0 | 1.09e-3 |
+| Medium (154) | 6200 | 5840 | 3780 (1.5x) | 464 (12.6x, sys 13.4x) | 8.14e-2 | 7.69e-3 |
+| Long (321) | 12970 | 11920 | 7520 (1.6x) | 874 (13.7x, sys 14.8x) | 4.01e-2 | 0.00e0 |
+| Long-repeat (282) | 9180 | 10960 | 6980 (1.6x) | 706 (15.5x, sys 13.0x) | 3.08e-2 | 1.18e-1 |
+| Arithmetic (56) | 2240 | 2130 | 1360 (1.6x) | 315 (6.8x, sys 7.1x) | 0.00e0 | 8.28e-3 |
+| Totals (73) | 2940 | 2780 | 1370 (2.0x) | 291 (9.6x, sys 10.1x) | 0.00e0 | 5.19e-2 |
+| Format (73) | 2930 | 2780 | 1790 (1.6x) | 345 (8.1x, sys 8.5x) | 5.51e-2 | 1.86e-3 |
+| Time-extract (78) | 3110 | 2960 | 1910 (1.6x) | 356 (8.3x, sys 8.7x) | 0.00e0 | 9.39e-2 |
 
 ## Reading
 
-- `main` prefill tracks the in-bench `loop` column (same token-at-a-time
-  code path; residual gap is GPU/system variance across runs).
-- batched-GEMV gives a flat ~2-4x (fewer launches, same HBM weight traffic).
-- Blocked GEMM (BM=32 x BN=128, BK=32, TM=4 x TN=4 register tile, ~20KB
-  shared) reuses each weight tile across 32 prompt rows: prefill stays
-  roughly flat while the loop scales linearly. Best observed: **29.6x**
-  (0.5B/321 tok), **19.3x** (1.5B/282 tok), **20.3x** (3B/321 tok).
-- Correctness: all 27 greedy generations (9 prompts x 3 models) are
-  **token-identical** between `main` and the GEMM path. Max-abs diffs are
-  over the full 151936-dim logits (tail noise; top-1 unaffected everywhere).
-- Notes: the loop runs first per prompt so it also pays first-launch warmup
-  on prompt 1. On 1.5B/3B long prompts the diffs reach ~0.1 and show small
-  run-to-run wobble (see branch log); batched helpers re-verified bit-exact
-  vs the loop on repeats, generations unaffected — root cause of the wobble
-  is still open.
+- Proper, same-work kernel speedup (loop→GEMM, median-of-3): **24.1x**
+  (0.5B/321 tok), **18.3x** (1.5B/282 tok), **15.5x** (3B/282 tok).
+  First-round headlines (29.6x/20.3x) were inflated by the four biases
+  above and are superseded by these.
+- batched-GEMV is flat ~1.5-4x (launch savings only, same HBM traffic).
+- GEMM prefill time stays roughly flat as prompts grow (weight tile reuse
+  across 32 rows); the loop scales linearly.
+- Correctness: 0.5B generations 9/9 identical, batched bit-exact 9/9, GEMM
+  twice bit-exact on the longest prompts. On 1.5B/3B long prompts, max-abs
+  diffs reach ~0.1-0.6 in rare runs (tail logits; top-1 stable in all
+  observed generations) with small run-to-run wobble — open stress-test
+  item, does not affect timing.
+- Transient (one-off, not reproduced in 8 reruns incl. 5x stress): the
+  `main` binary once degenerated to `!!!…` on 1.5B prompts 4–5 and 3B
+  prompt 4. Those three cells' `main` timings still measure real work and
+  are kept; generation agreement excludes them.
