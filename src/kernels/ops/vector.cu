@@ -41,3 +41,72 @@ extern "C" __global__ void append_cache(
         v_cache[pos * kv_dim + i] = v[i];
     }
 }
+
+extern "C" __global__ void embedding_batch(
+    const float* table, const int* tokens, float* out, int batch, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batch * hidden;
+    if (idx < total) {
+        int row = idx / hidden;
+        int col = idx % hidden;
+        out[idx] = table[tokens[row] * hidden + col];
+    }
+}
+
+extern "C" __global__ void apply_rope_batch(
+    const float* q, const float* k, float* q_out, float* k_out,
+    int start_pos, int batch, int q_heads, int kv_heads, int dim, float theta) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int half = dim / 2;
+    int q_n = q_heads * dim;
+    int kv_n = kv_heads * dim;
+    int total = batch * (q_n > kv_n ? q_n : kv_n);
+    if (idx >= total) return;
+    int row = -1, col = -1;
+    // Map flat index to (row, col) over the wider of q/k widths.
+    // Threads past the narrower width exit via the guards below.
+    int width = q_n > kv_n ? q_n : kv_n;
+    row = idx / width;
+    col = idx % width;
+    if (row >= batch) return;
+    int pos = start_pos + row;
+    if (col < q_n) {
+        int h = col / dim, d = col % dim;
+        int pair = d < half ? d : d - half;
+        float angle = (float)pos * powf(theta, -(2.0f * pair) / (float)dim);
+        float c = cosf(angle), s = sinf(angle);
+        int other = h * dim + (d < half ? d + half : d - half);
+        int base = row * q_n;
+        q_out[base + col] = d < half ? q[base + col] * c - q[base + other] * s
+                                     : q[base + col] * c + q[base + other] * s;
+    }
+    if (col < kv_n) {
+        int h = col / dim, d = col % dim;
+        int pair = d < half ? d : d - half;
+        float angle = (float)pos * powf(theta, -(2.0f * pair) / (float)dim);
+        float c = cosf(angle), s = sinf(angle);
+        int other = h * dim + (d < half ? d + half : d - half);
+        int base = row * kv_n;
+        k_out[base + col] = d < half ? k[base + col] * c - k[base + other] * s
+                                     : k[base + col] * c + k[base + other] * s;
+    }
+}
+
+extern "C" __global__ void append_cache_batch(
+    const float* k, const float* v, float* k_cache, float* v_cache,
+    int start_pos, int batch, int kv_dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batch * kv_dim;
+    if (idx < total) {
+        int row = idx / kv_dim;
+        int col = idx % kv_dim;
+        k_cache[(start_pos + row) * kv_dim + col] = k[idx];
+        v_cache[(start_pos + row) * kv_dim + col] = v[idx];
+    }
+}
+
+extern "C" __global__ void gather_row(
+    const float* input, float* out, int row, int batch, int width) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < width && row < batch) out[i] = input[row * width + i];
+}

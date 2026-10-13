@@ -47,6 +47,17 @@ struct Args {
     /// Maximum tokens to generate
     #[arg(long, default_value_t = 48)]
     max_tokens: usize,
+
+    /// Prefill linear path: gemv-loop (baseline, token-at-a-time),
+    /// batched-gemv (one batched GEMV per projection), or
+    /// gemm (blocked shared-memory GEMM). Decode always uses GEMV.
+    #[arg(long, default_value = "gemm")]
+    prefill: String,
+
+    /// Run all three prefill paths on each prompt, verify logits match the
+    /// baseline, and print a timing comparison before decoding.
+    #[arg(long, default_value_t = false)]
+    bench_prefill: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -157,6 +168,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n[5/5] Running {} prompt(s)...", prompts.len());
+    let prefill = args.prefill.to_lowercase();
+    if !["gemv-loop", "batched-gemv", "gemm"].contains(&prefill.as_str()) {
+        return Err(format!("Unknown --prefill '{}': expected gemv-loop, batched-gemv, or gemm", args.prefill).into());
+    }
     for (index, (label, prompt)) in prompts.iter().enumerate() {
         if let Err(error) = run_prompt(
             index + 1,
@@ -164,6 +179,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             label,
             prompt,
             args.max_tokens,
+            &prefill,
+            args.bench_prefill,
             &tokenizer,
             &model,
             &argmax,
@@ -223,6 +240,8 @@ fn run_prompt<M: ModelBackend>(
     label: &str,
     prompt: &str,
     max_tokens: usize,
+    prefill_mode: &str,
+    bench_prefill: bool,
     tokenizer: &Tokenizer,
     model: &M,
     argmax: &ArgmaxKernel,
@@ -253,31 +272,78 @@ fn run_prompt<M: ModelBackend>(
         .len()
         .checked_add(max_tokens)
         .ok_or("Requested sequence length overflow")?;
-    let mut cache = model.new_cache(stream, max_seq_len)?;
-    let mut current_pos = 0;
-    let mut first_token = None;
+    let host_tokens: Vec<usize> = input_tokens.iter().map(|&t| t as usize).collect();
 
-    let prefill_start = std::time::Instant::now();
-    for (index, &token) in input_tokens.iter().enumerate() {
-        let logits = model.forward_token(
-            token as usize,
-            current_pos,
-            &mut cache,
-            linear,
-            rmsnorm,
-            swiglu,
-            attention,
-            vector,
-            stream,
-        )?;
-        current_pos += 1;
-        if index + 1 == input_tokens.len() {
-            first_token = Some(select_token(argmax, stream, &logits)?);
+    // Prefill helpers. The token-loop is the baseline kept from main;
+    // the batched paths share the same resident weights.
+    let prefill_loop = |cache: &mut M::Cache| -> Result<(cudarc::driver::CudaSlice<f32>, std::time::Duration), String> {
+        let start = std::time::Instant::now();
+        let mut last = None;
+        for (pos, &tok) in host_tokens.iter().enumerate() {
+            let logits = model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
+            if pos + 1 == host_tokens.len() {
+                last = Some(logits);
+            }
         }
-    }
-    let prefill_time = prefill_start.elapsed();
+        stream.synchronize().map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
+        Ok((last.ok_or("Prompt prefill produced no logits")?, start.elapsed()))
+    };
+    let prefill_batched = |cache: &mut M::Cache, use_gemm: bool| -> Result<(cudarc::driver::CudaSlice<f32>, std::time::Duration), String> {
+        let start = std::time::Instant::now();
+        let logits = model.forward_prefill(&host_tokens, 0, cache, linear, rmsnorm, swiglu, attention, vector, stream, use_gemm)?;
+        stream.synchronize().map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
+        Ok((logits, start.elapsed()))
+    };
 
-    let mut next_token = first_token.ok_or("Prompt prefill produced no logits")?;
+    let mut cache = model.new_cache(stream, max_seq_len)?;
+    let (prefill_time, mut next_token) = if bench_prefill {
+        let mut cache_loop = model.new_cache(stream, max_seq_len)?;
+        let mut cache_bgemv = model.new_cache(stream, max_seq_len)?;
+        let mut cache_gemm = model.new_cache(stream, max_seq_len)?;
+        let (logits_loop, dt_loop) = prefill_loop(&mut cache_loop)?;
+        let (logits_bgemv, dt_bgemv) = prefill_batched(&mut cache_bgemv, false)?;
+        let (logits_gemm, dt_gemm) = prefill_batched(&mut cache_gemm, true)?;
+        let host_loop = stream.clone_dtoh(&logits_loop).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let host_bgemv = stream.clone_dtoh(&logits_bgemv).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let host_gemm = stream.clone_dtoh(&logits_gemm).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let max_diff = |a: &[f32], b: &[f32]| a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        println!(
+            "Prefill benchmark ({} tokens): gemv-loop {:.2?} | batched-gemv {:.2?} ({:.2}x) diff {:.2e} | gemm {:.2?} ({:.2}x) diff {:.2e}",
+            host_tokens.len(),
+            dt_loop,
+            dt_bgemv,
+            dt_loop.as_secs_f64() / dt_bgemv.as_secs_f64().max(1e-9),
+            max_diff(&host_loop, &host_bgemv),
+            dt_gemm,
+            dt_loop.as_secs_f64() / dt_gemm.as_secs_f64().max(1e-9),
+            max_diff(&host_loop, &host_gemm),
+        );
+        // Decode from the requested mode's cache so generation matches it.
+        let (dt, tok, chosen) = match prefill_mode {
+            "gemv-loop" => (dt_loop, select_token(argmax, stream, &logits_loop)?, cache_loop),
+            "batched-gemv" => (dt_bgemv, select_token(argmax, stream, &logits_bgemv)?, cache_bgemv),
+            _ => (dt_gemm, select_token(argmax, stream, &logits_gemm)?, cache_gemm),
+        };
+        cache = chosen;
+        (dt, tok)
+    } else {
+        match prefill_mode {
+            "gemv-loop" => {
+                let start = std::time::Instant::now();
+                let (logits, _) = prefill_loop(&mut cache)?;
+                (start.elapsed(), select_token(argmax, stream, &logits)?)
+            }
+            "batched-gemv" => {
+                let (logits, dt) = prefill_batched(&mut cache, false)?;
+                (dt, select_token(argmax, stream, &logits)?)
+            }
+            _ => {
+                let (logits, dt) = prefill_batched(&mut cache, true)?;
+                (dt, select_token(argmax, stream, &logits)?)
+            }
+        }
+    };
+    let mut current_pos = host_tokens.len();
     let mut generated_tokens = Vec::with_capacity(max_tokens);
     let mut decode_steps = 0usize;
     let generation_start = std::time::Instant::now();

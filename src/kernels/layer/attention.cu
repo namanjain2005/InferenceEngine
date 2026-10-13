@@ -96,3 +96,91 @@ extern "C" __global__ void attention_decode(
         out_head[d] = acc;
     }
 }
+
+// Batched prefill attention: one block per (prompt row, query head).
+// Q [batch, num_q_heads * head_dim] (already RoPE'd), K/V caches hold
+// [start_pos + batch, kv_dim] with the current prompt rows already appended.
+// Row r attends to the first (start_pos + r + 1) cache positions (causal).
+// Dynamic shared memory must fit the longest row: (start_pos + batch) floats.
+extern "C" __global__ void attention_prefill(
+    const float* __restrict__ q,
+    const float* __restrict__ k_cache,
+    const float* __restrict__ v_cache,
+    float*       __restrict__ output,
+    int   start_pos,
+    int   batch,
+    int   num_q_heads,
+    int   kv_dim,
+    int   head_dim,
+    int   heads_per_kv,
+    float scale)
+{
+    extern __shared__ float scores[];
+    __shared__ float reduction[256];
+
+    const int r = blockIdx.x;
+    const int h = blockIdx.y;
+    if (r >= batch) return;
+    const int kv_h = h / heads_per_kv;
+    const int tid = threadIdx.x;
+    const int lane = tid % WARP_SIZE;
+    const int warp = tid / WARP_SIZE;
+    const int warps_per_block = blockDim.x / WARP_SIZE;
+    const int seq_len = start_pos + r + 1;
+
+    const float* q_head = q + r * num_q_heads * head_dim + h * head_dim;
+
+    for (int t = warp; t < seq_len; t += warps_per_block) {
+        const float* k_ptr = k_cache + t * kv_dim + kv_h * head_dim;
+        float dot = 0.0f;
+        for (int d = lane; d < head_dim; d += WARP_SIZE)
+            dot = fmaf(q_head[d], k_ptr[d], dot);
+
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+            dot += __shfl_down_sync(0xffffffff, dot, offset);
+
+        if (lane == 0)
+            scores[t] = dot * scale;
+    }
+    __syncthreads();
+
+    float local_max = -1e30f;
+    for (int t = tid; t < seq_len; t += blockDim.x)
+        local_max = fmaxf(local_max, scores[t]);
+    reduction[tid] = local_max;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride)
+            reduction[tid] = fmaxf(reduction[tid], reduction[tid + stride]);
+        __syncthreads();
+    }
+    const float max_val = reduction[0];
+
+    float local_sum = 0.0f;
+    for (int t = tid; t < seq_len; t += blockDim.x) {
+        scores[t] = expf(scores[t] - max_val);
+        local_sum += scores[t];
+    }
+    reduction[tid] = local_sum;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride)
+            reduction[tid] += reduction[tid + stride];
+        __syncthreads();
+    }
+    const float inv_sum = 1.0f / reduction[0];
+
+    for (int t = tid; t < seq_len; t += blockDim.x)
+        scores[t] *= inv_sum;
+    __syncthreads();
+
+    float* out_head = output + r * num_q_heads * head_dim + h * head_dim;
+    for (int d = tid; d < head_dim; d += blockDim.x) {
+        float acc = 0.0f;
+        for (int t = 0; t < seq_len; t++)
+            acc = fmaf(scores[t], v_cache[t * kv_dim + kv_h * head_dim + d], acc);
+        out_head[d] = acc;
+    }
+}

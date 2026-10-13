@@ -45,6 +45,24 @@ pub trait ModelBackend {
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String>;
+    /// Batched prefill over `tokens` at cache positions
+    /// `[start_pos, start_pos + tokens.len())`. Fills the KV cache and returns
+    /// logits for the last prompt token only. `use_gemm` selects the blocked
+    /// GEMM linear path (`true`) or the batched GEMV baseline (`false`);
+    /// both read the same resident weight slices.
+    fn forward_prefill(
+        &self,
+        tokens: &[usize],
+        start_pos: usize,
+        cache: &mut Self::Cache,
+        linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+        use_gemm: bool,
+    ) -> Result<CudaSlice<f32>, String>;
 }
 
 pub struct LayerKVCache {
@@ -294,6 +312,98 @@ impl ModelBackend for Qwen2Model {
             hidden,
             self.config.vocab_size,
         )?;
+        Ok(logits)
+    }
+
+    fn forward_prefill(
+        &self,
+        tokens: &[usize],
+        start_pos: usize,
+        cache: &mut KVCache,
+        linear: &LinearKernel,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+        use_gemm: bool,
+    ) -> Result<CudaSlice<f32>, String> {
+        let batch = tokens.len();
+        if batch == 0 {
+            return Err("Prefill token batch must not be empty".into());
+        }
+        // Single trailing token: identical to the decode path, no batching win.
+        if batch == 1 {
+            return self.forward_token(tokens[0], start_pos, cache, linear, rmsnorm, swiglu, attention, vector, stream);
+        }
+        let hidden = self.config.hidden_size;
+        let q_dim = self
+            .config
+            .num_attention_heads
+            .checked_mul(self.config.head_dim())
+            .ok_or("Query dimension overflow")?;
+        let kv_dim = self
+            .config
+            .num_key_value_heads
+            .checked_mul(self.config.head_dim())
+            .ok_or("KV dimension overflow")?;
+        let intermediate = self.config.intermediate_size;
+
+        // Batched linear helper: same weights, GEMM or batched-GEMV baseline.
+        let lin = |stream: &Arc<CudaStream>, input: &CudaSlice<f32>, weights: &CudaSlice<f32>, bias: Option<&CudaSlice<f32>>, in_f: usize, out_f: usize| -> Result<CudaSlice<f32>, String> {
+            if use_gemm {
+                linear.forward_gemm(stream, input, weights, bias, batch, in_f, out_f)
+            } else {
+                linear.forward(stream, input, weights, bias, batch, in_f, out_f)
+            }
+        };
+
+        let mut x = vector.embedding_batch(stream, &self.embed_tokens, tokens, hidden)?;
+
+        for (l, layer) in self.layers.iter().enumerate() {
+            let x_norm = rmsnorm.forward_batch(stream, &x, &layer.input_layernorm, batch, hidden, self.config.rms_norm_eps)?;
+            let q = lin(stream, &x_norm, &layer.q_proj_weight, Some(&layer.q_proj_bias), hidden, q_dim)?;
+            let k = lin(stream, &x_norm, &layer.k_proj_weight, Some(&layer.k_proj_bias), hidden, kv_dim)?;
+            let v = lin(stream, &x_norm, &layer.v_proj_weight, Some(&layer.v_proj_bias), hidden, kv_dim)?;
+            let (q, k) = vector.rope_batch(
+                stream,
+                &q,
+                &k,
+                start_pos,
+                batch,
+                self.config.num_attention_heads,
+                self.config.num_key_value_heads,
+                self.config.head_dim(),
+                self.config.rope_theta,
+            )?;
+            let layer_cache = &mut cache.layers[l];
+            vector.append_cache_batch(stream, &k, &v, &mut layer_cache.k, &mut layer_cache.v, start_pos, batch, kv_dim)?;
+            let attn_out = attention.forward_prefill(
+                stream,
+                &q,
+                &layer_cache.k,
+                &layer_cache.v,
+                start_pos,
+                batch,
+                self.config.num_attention_heads,
+                self.config.num_key_value_heads,
+                self.config.head_dim(),
+            )?;
+            let attn_proj = lin(stream, &attn_out, &layer.o_proj_weight, None, q_dim, hidden)?;
+            x = vector.add(stream, &x, &attn_proj)?;
+
+            let mlp_norm = rmsnorm.forward_batch(stream, &x, &layer.post_attention_layernorm, batch, hidden, self.config.rms_norm_eps)?;
+            let gate = lin(stream, &mlp_norm, &layer.gate_proj_weight, None, hidden, intermediate)?;
+            let up = lin(stream, &mlp_norm, &layer.up_proj_weight, None, hidden, intermediate)?;
+            let act = swiglu.forward(stream, &gate, &up)?;
+            let mlp_out = lin(stream, &act, &layer.down_proj_weight, None, intermediate, hidden)?;
+            x = vector.add(stream, &x, &mlp_out)?;
+        }
+        // Logits for the last prompt token only: avoids a [batch, vocab]
+        // temporary (batch * 151936 floats) and matches forward_token output.
+        let final_norm = rmsnorm.forward_batch(stream, &x, &self.norm, batch, hidden, self.config.rms_norm_eps)?;
+        let last = vector.gather_row(stream, &final_norm, batch - 1, batch, hidden)?;
+        let logits = linear.forward(stream, &last, &self.embed_tokens, None, 1, hidden, self.config.vocab_size)?;
         Ok(logits)
     }
 }
