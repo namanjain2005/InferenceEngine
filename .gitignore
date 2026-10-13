@@ -4,6 +4,7 @@ scripts/
 DGX_WORKFLOW.MD
 
 # Local profiler outputs
+*.swp
 flamegraph_prefill_decode.svg
 forward_kernels.nsys-rep
 forward_kernels.sqlite

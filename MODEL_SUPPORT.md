@@ -40,6 +40,13 @@ cargo run --release -- --gpu 0 \
   --prompt 'Reply with a short greeting.' --max-tokens 8
 ```
 
+Run the full suite in `BASE_PROMPTS.txt` by omitting `--prompt`:
+
+```sh
+cargo run --release -- --gpu 0 \
+  --model-dir models/Qwen2.5-3B-Instruct --max-tokens 48
+```
+
 Weights are currently converted to f32 before upload. This means the model
 parameters alone use roughly 4 bytes each on the GPU: the tested 3.09B model
 uses about 11.5 GiB for weights, while a 7B model would be too close to the
@@ -50,9 +57,15 @@ CUDA allocations and temporary tensors.
 
 | Checkpoint | Parameters | Weight layout | V100 run |
 | --- | ---: | --- | --- |
-| Qwen2.5-0.5B-Instruct | 494M | 1 file | 8-token smoke test |
-| Qwen2.5-1.5B-Instruct | 1.54B | 1 file | 8-token smoke test |
-| Qwen2.5-3B-Instruct | 3.09B | 2 shards | 8-token smoke test |
+| Qwen2.5-0.5B-Instruct | 494M | 1 file | 9-prompt suite |
+| Qwen2.5-1.5B-Instruct | 1.54B | 1 file | 9-prompt suite |
+| Qwen2.5-3B-Instruct | 3.09B | 2 shards | 9-prompt suite |
+
+All suite runs completed without inference errors or OOMs. Text quality was not
+uniform: the arithmetic prompt did not produce its requested result within 48
+tokens on any size; the comparison prompt was wrong on 0.5B and 3B; and 1.5B
+answered the time question with 180 minutes instead of 90. Treat the suite as a
+forward-pass and generation smoke test, not a model accuracy benchmark.
 
 ## GPU argmax check
 

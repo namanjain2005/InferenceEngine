@@ -73,3 +73,22 @@ is therefore an important workload dimension when comparing kernel versions.
 
 According to the passage, what does the key-value cache save the model from
 recomputing? Answer in one complete sentence.
+
+[6 - Multi-step arithmetic]
+A library has 6 shelves with 14 books on each shelf. It lends 19 books. Show
+one calculation and state how many books remain in one complete sentence.
+
+[7 - Compare totals]
+Run A generated 8 tokens for each of 120 prompts. Run B generated 12 tokens for
+each of the same 120 prompts. Which run generated more tokens, and by how many?
+Show the calculation and answer in one sentence.
+
+[8 - Exact format]
+Return exactly one JSON object with the keys "answer" and "check". Set "answer"
+to the result of 3 times 7 and "check" to the string "3 x 7". Do not include
+Markdown or any text outside the JSON object.
+
+[9 - Time extraction]
+The workshop began setup at 9:00 AM. Doors opened at 10:30 AM, and the event
+ended at 12:00 PM. How much time passed between the doors opening and the event
+ending? Answer in minutes in one complete sentence.
