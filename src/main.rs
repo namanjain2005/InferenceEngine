@@ -5,12 +5,12 @@ mod model;
 mod safetensors;
 
 use clap::Parser;
-use config::QwenConfig;
+use config::ModelConfig;
 use cudarc::driver::CudaStream;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::linear::LinearKernel;
 use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
-use model::{KVCache, ModelWeights};
+use model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,18 +19,26 @@ use tokenizers::Tokenizer;
 const BASE_PROMPT_TEXT: &str = include_str!("../BASE_PROMPTS.txt");
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Minimal Qwen2.5-0.5B-Instruct Inference Engine in Rust from Scratch")]
+#[command(
+    author,
+    version,
+    about = "Minimal causal language model inference engine in Rust + CUDA"
+)]
 struct Args {
     /// Target GPU device index (defaults to auto-selecting highest free VRAM)
     #[arg(long)]
     gpu: Option<usize>,
 
-    /// Path to model directory containing model.safetensors and config.json
+    /// Path to model directory containing config.json and safetensors weights
     #[arg(
         long,
         default_value = "/home/23uec572/Naman_jain/InferenceEngine/models/Qwen2.5-0.5B-Instruct"
     )]
     model_dir: PathBuf,
+
+    /// Validate config and checkpoint tensor shapes without initializing CUDA
+    #[arg(long)]
+    check_model: bool,
 
     /// Run one custom prompt instead of the built-in prompt suite
     #[arg(long)]
@@ -43,15 +51,40 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
-    println!(" Qwen 500M Inference Engine (From-Scratch Rust + CUDA)");
+    println!(" Causal LM Inference Engine (Rust + CUDA)");
     println!("============================================================");
 
     let args = Args::parse();
 
+    if args.check_model {
+        let config = ModelConfig::from_file(args.model_dir.join("config.json"))?;
+        config.validate()?;
+        let st = SafeTensors::open_model_dir(&args.model_dir)?;
+        let (parameters, bytes) = validate_qwen2_checkpoint(&config, &st)?;
+        println!("Checkpoint validation passed");
+        println!("Architecture: Qwen2 decoder");
+        println!(
+            "Layers: {}, hidden: {}, intermediate: {}, vocab: {}",
+            config.num_hidden_layers,
+            config.hidden_size,
+            config.intermediate_size,
+            config.vocab_size
+        );
+        println!(
+            "Safetensors files: {}, tensors: {}",
+            st.file_count(),
+            st.tensor_count()
+        );
+        println!("Validated parameters: {parameters}");
+        println!("Source weight bytes: {} MiB", bytes / (1024 * 1024));
+        return Ok(());
+    }
+
     // 1. Query nvidia-smi and select GPU
     println!("\n[1/5] Checking NVIDIA GPUs via nvidia-smi...");
     let gpus = query_nvidia_smi().map_err(|e| format!("Failed to query GPUs: {}", e))?;
-    let selected_gpu = select_gpu(args.gpu, &gpus).map_err(|e| format!("GPU selection error: {}", e))?;
+    let selected_gpu =
+        select_gpu(args.gpu, &gpus).map_err(|e| format!("GPU selection error: {}", e))?;
     print_gpu_table(&gpus, selected_gpu);
 
     // 2. Initialize CUDA device
@@ -68,10 +101,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dev_test = cuda_stream.clone_htod(&test_buf)?;
     let host_test = cuda_stream.clone_dtoh(&dev_test)?;
     assert_eq!(test_buf, host_test);
-    println!("   -> GPU {} VRAM allocation and memory transfer verified.", selected_gpu);
+    println!(
+        "   -> GPU {} VRAM allocation and memory transfer verified.",
+        selected_gpu
+    );
 
     // 3. Load Tokenizer
-    println!("\n[3/5] Loading Tokenizer from: {}", args.model_dir.display());
+    println!(
+        "\n[3/5] Loading Tokenizer from: {}",
+        args.model_dir.display()
+    );
     let tokenizer_path = args.model_dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
@@ -80,7 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Load Model Config and Safetensors
     println!("\n[4/5] Loading Model Config & Safetensors weights...");
     let config_path = args.model_dir.join("config.json");
-    let config = QwenConfig::from_file(&config_path)?;
+    let config = ModelConfig::from_file(&config_path)?;
+    config.validate()?;
     println!(
         "   -> Config: {} layers, hidden={}, intermediate={}, {} q_heads, {} kv_heads (GQA)",
         config.num_hidden_layers,
@@ -90,12 +130,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.num_key_value_heads
     );
 
-    let safetensors_path = args.model_dir.join("model.safetensors");
-    let mut st = SafeTensors::open(&safetensors_path)?;
-    println!("   -> Safetensors opened: {} tensors in header.", st.tensors.len());
+    let mut st = SafeTensors::open_model_dir(&args.model_dir)?;
+    let (parameter_count, checkpoint_bytes) = validate_qwen2_checkpoint(&config, &st)?;
+    println!(
+        "   -> Safetensors opened: {} tensors in header.",
+        st.tensor_count()
+    );
+    println!(
+        "   -> Validated {parameter_count} parameters ({:.2} GiB source weights; {:.2} GiB as f32 on GPU).",
+        checkpoint_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        parameter_count as f64 * 4.0 / (1024.0 * 1024.0 * 1024.0)
+    );
 
     let start_load = std::time::Instant::now();
-    let model = ModelWeights::load(&mut st, config.clone(), &linear, &cuda_stream)?;
+    let model = Qwen2Model::load(&mut st, config.clone(), &linear, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
     // 5. Run the full built-in suite unless a one-off prompt was supplied.
@@ -116,7 +164,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             prompt,
             args.max_tokens,
             &tokenizer,
-            &config,
             &model,
             &linear,
             &rmsnorm,
@@ -168,15 +215,14 @@ fn base_prompts() -> Vec<(String, String)> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_prompt(
+fn run_prompt<M: ModelBackend>(
     index: usize,
     total: usize,
     label: &str,
     prompt: &str,
     max_tokens: usize,
     tokenizer: &Tokenizer,
-    config: &QwenConfig,
-    model: &ModelWeights,
+    model: &M,
     linear: &LinearKernel,
     rmsnorm: &RmsNormKernel,
     swiglu: &SwiGluKernel,
@@ -184,6 +230,7 @@ fn run_prompt(
     vector: &VectorKernels,
     stream: &Arc<CudaStream>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = model.config();
     println!("\n--- Prompt {index}/{total}: {label} ---");
 
     let formatted_prompt = format!(
@@ -203,11 +250,7 @@ fn run_prompt(
         .len()
         .checked_add(max_tokens)
         .ok_or("Requested sequence length overflow")?;
-    let kv_dim = config
-        .num_key_value_heads
-        .checked_mul(config.head_dim())
-        .ok_or("KV dimension overflow")?;
-    let mut cache = KVCache::new(stream, config.num_hidden_layers, max_seq_len, kv_dim)?;
+    let mut cache = model.new_cache(stream, max_seq_len)?;
     let mut current_pos = 0;
     let mut first_token = None;
 
@@ -296,4 +339,3 @@ fn argmax(slice: &[f32]) -> usize {
     }
     max_idx
 }
-

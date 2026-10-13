@@ -2,3 +2,12 @@
 models/
 scripts/
 DGX_WORKFLOW.MD
+
+# Local profiler outputs
+flamegraph_prefill_decode.svg
+forward_kernels.nsys-rep
+forward_kernels.sqlite
+inference.nsys-rep
+inference.sqlite
+perf.data
+perf.data.old
