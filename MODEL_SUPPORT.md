@@ -11,6 +11,10 @@ family still needs its own config mapping, checkpoint tensor mapping, and
 backend implementation; sharing the interface does not imply that different
 architectures already share the same math.
 
+The forward pass keeps logits on the GPU. A CUDA reduction selects the next
+token, and only that token ID is copied to the host. Prompt prefill reduces
+only the final prompt position because earlier prompt tokens are already known.
+
 ## Checkpoint validation
 
 Download the additional local checkpoints with:
@@ -49,3 +53,17 @@ CUDA allocations and temporary tensors.
 | Qwen2.5-0.5B-Instruct | 494M | 1 file | 8-token smoke test |
 | Qwen2.5-1.5B-Instruct | 1.54B | 1 file | 8-token smoke test |
 | Qwen2.5-3B-Instruct | 3.09B | 2 shards | 8-token smoke test |
+
+## GPU argmax check
+
+On GPU 0, a single 8-token greeting run before and after moving argmax to CUDA
+measured:
+
+| Model | Decode before → after | Prefill before → after |
+| --- | ---: | ---: |
+| 0.5B | 112.11 → 153.76 tok/s | 230.13 → 162.50 ms |
+| 1.5B | 65.67 → 75.94 tok/s | 391.87 → 333.82 ms |
+| 3B | 40.18 → 43.75 tok/s | 634.36 → 573.59 ms |
+
+These are single short smoke runs, so treat the rates as directional rather than
+stable benchmarks. All three generated the same greeting as before.

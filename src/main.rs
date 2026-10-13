@@ -9,7 +9,7 @@ use config::ModelConfig;
 use cudarc::driver::CudaStream;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::linear::LinearKernel;
-use kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
+use kernels::ops::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
@@ -95,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
     let attention = AttentionKernel::new(&cuda_ctx)?;
     let vector = VectorKernels::new(&cuda_ctx)?;
+    let argmax = ArgmaxKernel::new(&cuda_ctx)?;
 
     // Test a quick device allocation to verify context is live
     let test_buf = vec![1.0f32, 2.0f32, 3.0f32, 4.0f32];
@@ -165,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.max_tokens,
             &tokenizer,
             &model,
+            &argmax,
             &linear,
             &rmsnorm,
             &swiglu,
@@ -223,6 +225,7 @@ fn run_prompt<M: ModelBackend>(
     max_tokens: usize,
     tokenizer: &Tokenizer,
     model: &M,
+    argmax: &ArgmaxKernel,
     linear: &LinearKernel,
     rmsnorm: &RmsNormKernel,
     swiglu: &SwiGluKernel,
@@ -255,7 +258,7 @@ fn run_prompt<M: ModelBackend>(
     let mut first_token = None;
 
     let prefill_start = std::time::Instant::now();
-    for &token in input_tokens {
+    for (index, &token) in input_tokens.iter().enumerate() {
         let logits = model.forward_token(
             token as usize,
             current_pos,
@@ -268,7 +271,9 @@ fn run_prompt<M: ModelBackend>(
             stream,
         )?;
         current_pos += 1;
-        first_token = Some(argmax(&logits));
+        if index + 1 == input_tokens.len() {
+            first_token = Some(select_token(argmax, stream, &logits)?);
+        }
     }
     let prefill_time = prefill_start.elapsed();
 
@@ -298,7 +303,7 @@ fn run_prompt<M: ModelBackend>(
         )?;
         decode_steps += 1;
         current_pos += 1;
-        next_token = argmax(&logits);
+        next_token = select_token(argmax, stream, &logits)?;
     }
     let generation_time = generation_start.elapsed();
 
@@ -328,14 +333,17 @@ fn run_prompt<M: ModelBackend>(
     Ok(())
 }
 
-fn argmax(slice: &[f32]) -> usize {
-    let mut max_idx = 0;
-    let mut max_val = f32::NEG_INFINITY;
-    for (i, &v) in slice.iter().enumerate() {
-        if v > max_val {
-            max_val = v;
-            max_idx = i;
-        }
-    }
-    max_idx
+fn select_token(
+    argmax: &ArgmaxKernel,
+    stream: &Arc<CudaStream>,
+    logits: &cudarc::driver::CudaSlice<f32>,
+) -> Result<usize, String> {
+    let device_token = argmax.forward(stream, logits)?;
+    let host_token = stream
+        .clone_dtoh(&device_token)
+        .map_err(|e| format!("Copying selected token to host failed: {e}"))?;
+    let token = *host_token
+        .first()
+        .ok_or_else(|| "Argmax returned no token".to_string())?;
+    usize::try_from(token).map_err(|_| format!("Argmax returned an invalid token ID: {token}"))
 }

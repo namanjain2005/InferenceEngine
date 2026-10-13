@@ -44,7 +44,7 @@ pub trait ModelBackend {
         attention: &AttentionKernel,
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
-    ) -> Result<Vec<f32>, String>;
+    ) -> Result<CudaSlice<f32>, String>;
 }
 
 pub struct LayerKVCache {
@@ -162,7 +162,7 @@ impl ModelBackend for Qwen2Model {
         attention: &AttentionKernel,
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
-    ) -> Result<Vec<f32>, String> {
+    ) -> Result<CudaSlice<f32>, String> {
         let hidden = self.config.hidden_size;
         let q_dim = self
             .config
@@ -294,9 +294,7 @@ impl ModelBackend for Qwen2Model {
             hidden,
             self.config.vocab_size,
         )?;
-        stream
-            .clone_dtoh(&logits)
-            .map_err(|e| format!("Copying final logits to host failed: {e}"))
+        Ok(logits)
     }
 }
 

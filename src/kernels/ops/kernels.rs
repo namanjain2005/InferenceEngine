@@ -6,6 +6,7 @@ const RMS_NORM_CUDA: &str = include_str!("RMSNorm.cu");
 const SWIGLU_CUDA: &str = include_str!("SWiGLU.cu");
 const ATTENTION_CUDA: &str = include_str!("../layer/attention.cu");
 const VECTOR_CUDA: &str = include_str!("vector.cu");
+const ARGMAX_CUDA: &str = include_str!("argmax.cu");
 const THREADS: u32 = 256;
 
 fn load_kernel(
@@ -103,6 +104,35 @@ impl SwiGluKernel {
 pub struct AttentionKernel {
     _module: Arc<CudaModule>,
     function: CudaFunction,
+}
+
+pub struct ArgmaxKernel {
+    _module: Arc<CudaModule>,
+    function: CudaFunction,
+}
+
+impl ArgmaxKernel {
+    pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
+        let (module, function) = load_kernel(context, ARGMAX_CUDA, "argmax_f32")?;
+        Ok(Self { _module: module, function })
+    }
+
+    /// Reduces a device logits vector to a device-side token ID.
+    pub fn forward(&self, stream: &Arc<CudaStream>, values: &CudaSlice<f32>) -> Result<CudaSlice<i32>, String> {
+        if values.is_empty() {
+            return Err("Argmax input must not be empty".into());
+        }
+        let n = checked_i32(values.len(), "Argmax input length")?;
+        let mut result = stream.alloc_zeros::<i32>(1).map_err(|e| format!("Allocating argmax result failed: {e}"))?;
+        let mut launch = stream.launch_builder(&self.function);
+        launch.arg(values);
+        launch.arg(&mut result);
+        launch.arg(&n);
+        unsafe {
+            launch.launch(LaunchConfig { grid_dim: (1, 1, 1), block_dim: (THREADS, 1, 1), shared_mem_bytes: 0 })
+        }.map_err(|e| format!("Launching argmax CUDA kernel failed: {e}"))?;
+        Ok(result)
+    }
 }
 
 impl AttentionKernel {
