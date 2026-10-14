@@ -1,5 +1,5 @@
 use crate::config::ModelConfig;
-use crate::kernels::linear::LinearKernel;
+use crate::kernels::LinearOp;
 use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
@@ -38,7 +38,7 @@ pub trait ModelBackend {
         token_id: usize,
         pos: usize,
         cache: &mut Self::Cache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -54,7 +54,7 @@ pub trait ModelBackend {
         token_id: usize,
         pos: usize,
         cache: &mut Self::Cache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -71,7 +71,7 @@ pub trait ModelBackend {
         tokens: &[usize],
         start_pos: usize,
         cache: &mut Self::Cache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -117,7 +117,7 @@ impl Qwen2Model {
     pub fn load(
         st: &mut SafeTensors,
         config: ModelConfig,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         stream: &Arc<CudaStream>,
     ) -> Result<Self, String> {
         println!("   Uploading embedding and final norm weights to GPU...");
@@ -177,7 +177,7 @@ impl Qwen2Model {
         token_id: usize,
         pos: usize,
         cache: &mut KVCache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -200,30 +200,27 @@ impl Qwen2Model {
         for (l, layer) in self.layers.iter().enumerate() {
             let x_norm =
                 rmsnorm.forward(stream, &x, &layer.input_layernorm, self.config.rms_norm_eps)?;
-            let q = linear.forward(
+            let q = linear.gemv(
                 stream,
                 &x_norm,
                 &layer.q_proj_weight,
                 Some(&layer.q_proj_bias),
-                1,
                 hidden,
                 q_dim,
             )?;
-            let k = linear.forward(
+            let k = linear.gemv(
                 stream,
                 &x_norm,
                 &layer.k_proj_weight,
                 Some(&layer.k_proj_bias),
-                1,
                 hidden,
                 kv_dim,
             )?;
-            let v = linear.forward(
+            let v = linear.gemv(
                 stream,
                 &x_norm,
                 &layer.v_proj_weight,
                 Some(&layer.v_proj_bias),
-                1,
                 hidden,
                 kv_dim,
             )?;
@@ -257,12 +254,11 @@ impl Qwen2Model {
                 self.config.num_key_value_heads,
                 self.config.head_dim(),
             )?;
-            let attn_proj = linear.forward(
+            let attn_proj = linear.gemv(
                 stream,
                 &attn_out,
                 &layer.o_proj_weight,
                 None,
-                1,
                 q_dim,
                 hidden,
             )?;
@@ -275,31 +271,28 @@ impl Qwen2Model {
                 self.config.rms_norm_eps,
             )?;
             let intermediate = self.config.intermediate_size;
-            let gate = linear.forward(
+            let gate = linear.gemv(
                 stream,
                 &mlp_norm,
                 &layer.gate_proj_weight,
                 None,
-                1,
                 hidden,
                 intermediate,
             )?;
-            let up = linear.forward(
+            let up = linear.gemv(
                 stream,
                 &mlp_norm,
                 &layer.up_proj_weight,
                 None,
-                1,
                 hidden,
                 intermediate,
             )?;
             let act = swiglu.forward(stream, &gate, &up)?;
-            let mlp_out = linear.forward(
+            let mlp_out = linear.gemv(
                 stream,
                 &act,
                 &layer.down_proj_weight,
                 None,
-                1,
                 intermediate,
                 hidden,
             )?;
@@ -331,7 +324,7 @@ impl ModelBackend for Qwen2Model {
         token_id: usize,
         pos: usize,
         cache: &mut KVCache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -341,12 +334,11 @@ impl ModelBackend for Qwen2Model {
         let hidden = self.config.hidden_size;
         let x = self.forward_core(token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
         let final_norm = rmsnorm.forward(stream, &x, &self.norm, self.config.rms_norm_eps)?;
-        let logits = linear.forward(
+        let logits = linear.gemv(
             stream,
             &final_norm,
             &self.embed_tokens,
             None,
-            1,
             hidden,
             self.config.vocab_size,
         )?;
@@ -358,7 +350,7 @@ impl ModelBackend for Qwen2Model {
         token_id: usize,
         pos: usize,
         cache: &mut KVCache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -373,7 +365,7 @@ impl ModelBackend for Qwen2Model {
         tokens: &[usize],
         start_pos: usize,
         cache: &mut KVCache,
-        linear: &LinearKernel,
+        linear: &dyn LinearOp,
         rmsnorm: &RmsNormKernel,
         swiglu: &SwiGluKernel,
         attention: &AttentionKernel,
@@ -405,9 +397,9 @@ impl ModelBackend for Qwen2Model {
         // Batched linear helper: same weights, GEMM or batched-GEMV baseline.
         let lin = |stream: &Arc<CudaStream>, input: &CudaSlice<f32>, weights: &CudaSlice<f32>, bias: Option<&CudaSlice<f32>>, in_f: usize, out_f: usize| -> Result<CudaSlice<f32>, String> {
             if use_gemm {
-                linear.forward_gemm(stream, input, weights, bias, batch, in_f, out_f)
+                linear.gemm(stream, input, weights, bias, batch, in_f, out_f)
             } else {
-                linear.forward(stream, input, weights, bias, batch, in_f, out_f)
+                linear.gemv_batched(stream, input, weights, bias, batch, in_f, out_f)
             }
         };
 
@@ -456,7 +448,7 @@ impl ModelBackend for Qwen2Model {
         // temporary (batch * 151936 floats) and matches forward_token output.
         let final_norm = rmsnorm.forward_batch(stream, &x, &self.norm, batch, hidden, self.config.rms_norm_eps)?;
         let last = vector.gather_row(stream, &final_norm, batch - 1, batch, hidden)?;
-        let logits = linear.forward(stream, &last, &self.embed_tokens, None, 1, hidden, self.config.vocab_size)?;
+        let logits = linear.gemv(stream, &last, &self.embed_tokens, None, hidden, self.config.vocab_size)?;
         Ok(logits)
     }
 }

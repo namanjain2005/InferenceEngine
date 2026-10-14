@@ -84,6 +84,37 @@ work. The loop column (same-process median-of-3) is the rigorous baseline;
 | Format (73) | 2930 | 2780 | 1790 (1.6x) | 345 (8.1x, sys 8.5x) | 5.51e-2 | 1.86e-3 |
 | Time-extract (78) | 3110 | 2960 | 1910 (1.6x) | 356 (8.3x, sys 8.7x) | 0.00e0 | 9.39e-2 |
 
+## cuBLAS backend (`--linear cublas`, default)
+
+`CublasLinear` implements the same `LinearOp` trait over identical
+row-major layouts (standard transpose mapping, no rearrangement), plus a
+small `bias_add` kernel since cuBLAS has no fused bias. Custom kernels are
+untouched and selectable via `--linear custom` for fusing work.
+
+Qwen2.5-0.5B, same fair protocol (median-of-3, GPU 6), 9/9 generations
+token-identical to the custom backend:
+
+| Prompt (tok) | loop (cublas) | cublas-GEMM | speedup |
+|---|---|---|---|
+| 33 | 181 | 8.6 | 21.0x |
+| 45 | 239 | 8.8 | 27.3x |
+| 154 | 849 | 18.5 | 46.0x |
+| 321 | 2290 | 33.5 | 68.5x |
+| 282 | 1580 | 30.5 | 51.9x |
+
+Notes:
+
+- cuBLAS prefill is ~2.3x faster than the custom blocked GEMM (33 ms vs
+  78 ms at 321 tok). Decode is a wash/slightly custom-favored (lean GEMV
+  launch vs sgemm-per-token overhead) — a first hint for per-case
+  specialization later: custom GEMV for decode, cuBLAS for prefill.
+- Gotcha found while wiring this up: **cublas 12.4 `cublasSgemv`
+  transpose path writes past `y` for K != N shapes** (compute-sanitizer:
+  `Invalid __global__ write` in `gemv2T_kernel`; dmesg Xid 31 PDE faults
+  + Xid 43). Decode therefore routes through `sgemm` with M=1, which is
+  sanitizer-clean (0 errors) and value-exact on all shapes. Revisit if the
+  CUDA/cuBLAS version changes.
+
 ## Reading
 
 - Proper, same-work kernel speedup (loop→GEMM, median-of-3): **24.1x**

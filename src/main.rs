@@ -8,7 +8,9 @@ use clap::Parser;
 use config::ModelConfig;
 use cudarc::driver::CudaStream;
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
+use kernels::cublas_linear::CublasLinear;
 use kernels::linear::LinearKernel;
+use kernels::LinearOp;
 use kernels::ops::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
 use safetensors::SafeTensors;
@@ -63,6 +65,11 @@ struct Args {
     /// Catches machine noise on shared GPUs.
     #[arg(long, default_value_t = 3)]
     bench_repeat: usize,
+
+    /// Linear backend: cublas (sgemm/sgemv, default) or custom
+    /// (hand-rolled GEMV/GEMM kernels, kept for fusing experiments).
+    #[arg(long, default_value = "cublas")]
+    linear: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -106,7 +113,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Initialize CUDA device
     println!("[2/5] Initializing CUDA Context on GPU {}...", selected_gpu);
     let (cuda_ctx, cuda_stream) = init_cuda_device(selected_gpu)?;
-    let linear = LinearKernel::new(&cuda_ctx)?;
+    let linear_custom = LinearKernel::new(&cuda_ctx)?;
+    let linear_cublas = CublasLinear::new(&cuda_ctx, cuda_stream.clone())?;
+    let backend = args.linear.to_lowercase();
+    if !["custom", "cublas"].contains(&backend.as_str()) {
+        return Err(format!("Unknown --linear '{}': expected custom or cublas", args.linear).into());
+    }
+    let linear: &dyn LinearOp = match backend.as_str() {
+        "custom" => &linear_custom,
+        _ => &linear_cublas,
+    };
+    println!("   -> Linear backend: {backend} (custom kernels kept for fusing work).");
     let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
     let attention = AttentionKernel::new(&cuda_ctx)?;
@@ -160,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let start_load = std::time::Instant::now();
-    let model = Qwen2Model::load(&mut st, config.clone(), &linear, &cuda_stream)?;
+    let model = Qwen2Model::load(&mut st, config.clone(), linear, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
     // Warmup: run every prefill path once on throwaway caches so timed runs
@@ -171,15 +188,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Token loop warmup (last-logits form, same as the timed baseline).
         for (pos, &tok) in tiny.iter().enumerate() {
             if pos + 1 < tiny.len() {
-                model.forward_token_hidden(tok, pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                model.forward_token_hidden(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
             } else {
-                model.forward_token(tok, pos, &mut cache, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                model.forward_token(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
             }
         }
         let mut cache_b = model.new_cache(&cuda_stream, 4)?;
-        let _ = model.forward_prefill(&tiny, 0, &mut cache_b, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
+        let _ = model.forward_prefill(&tiny, 0, &mut cache_b, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
         let mut cache_g = model.new_cache(&cuda_stream, 4)?;
-        let _ = model.forward_prefill(&tiny, 0, &mut cache_g, &linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
+        let _ = model.forward_prefill(&tiny, 0, &mut cache_g, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
         cuda_stream.synchronize().map_err(|e| format!("Warmup synchronize failed: {e}"))?;
         println!("   -> Warmup (all prefill paths) done.");
     }
@@ -211,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &tokenizer,
             &model,
             &argmax,
-            &linear,
+            linear,
             &rmsnorm,
             &swiglu,
             &attention,
@@ -273,7 +290,7 @@ fn run_prompt<M: ModelBackend>(
     tokenizer: &Tokenizer,
     model: &M,
     argmax: &ArgmaxKernel,
-    linear: &LinearKernel,
+    linear: &dyn LinearOp,
     rmsnorm: &RmsNormKernel,
     swiglu: &SwiGluKernel,
     attention: &AttentionKernel,

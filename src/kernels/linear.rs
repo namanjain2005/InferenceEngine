@@ -1,3 +1,4 @@
+use super::LinearOp;
 use cudarc::driver::{CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::compile_ptx;
 use std::sync::Arc;
@@ -118,5 +119,49 @@ impl LinearKernel {
         let cfg = LaunchConfig { grid_dim: (grid_x, grid_y, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 };
         unsafe { launch.launch(cfg) }.map_err(|e| format!("Launching GEMM CUDA kernel failed: {e}"))?;
         Ok(output)
+    }
+}
+
+impl LinearOp for LinearKernel {
+    fn upload(&self, stream: &Arc<CudaStream>, values: &[f32], name: &str) -> Result<CudaSlice<f32>, String> {
+        LinearKernel::upload(self, stream, values, name)
+    }
+
+    fn gemv(
+        &self,
+        stream: &Arc<CudaStream>,
+        input: &CudaSlice<f32>,
+        weights: &CudaSlice<f32>,
+        bias: Option<&CudaSlice<f32>>,
+        in_features: usize,
+        out_features: usize,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.forward(stream, input, weights, bias, 1, in_features, out_features)
+    }
+
+    fn gemm(
+        &self,
+        stream: &Arc<CudaStream>,
+        input: &CudaSlice<f32>,
+        weights: &CudaSlice<f32>,
+        bias: Option<&CudaSlice<f32>>,
+        batch: usize,
+        in_features: usize,
+        out_features: usize,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.forward_gemm(stream, input, weights, bias, batch, in_features, out_features)
+    }
+
+    fn gemv_batched(
+        &self,
+        stream: &Arc<CudaStream>,
+        input: &CudaSlice<f32>,
+        weights: &CudaSlice<f32>,
+        bias: Option<&CudaSlice<f32>>,
+        batch: usize,
+        in_features: usize,
+        out_features: usize,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.forward(stream, input, weights, bias, batch, in_features, out_features)
     }
 }
