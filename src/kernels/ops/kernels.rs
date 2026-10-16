@@ -218,7 +218,11 @@ impl AttentionKernel {
         launch.arg(&head_i32);
         launch.arg(&heads_per_kv);
         launch.arg(&scale);
-        let cfg = LaunchConfig { grid_dim: (num_q_heads as u32, 1, 1), block_dim: (THREADS, 1, 1), shared_mem_bytes: (seq_len * 4) as u32 };
+        // Pad the dynamic score buffer: nvcc may emit a wider/vectorised tail
+        // load for the `scores[t]` scans, which otherwise runs a few elements
+        // past the logical end of the buffer (compute-sanitizer: invalid shared
+        // read just past `reduction`). The extra slots keep those loads in range.
+        let cfg = LaunchConfig { grid_dim: (num_q_heads as u32, 1, 1), block_dim: (THREADS, 1, 1), shared_mem_bytes: ((seq_len + 8) * 4) as u32 };
         unsafe { launch.launch(cfg) }.map_err(|e| format!("Launching attention CUDA kernel failed: {e}"))?;
         Ok(output_dev)
     }
@@ -273,7 +277,8 @@ impl AttentionKernel {
         launch.arg(&head_i32);
         launch.arg(&heads_per_kv);
         launch.arg(&scale);
-        let cfg = LaunchConfig { grid_dim: (batch as u32, num_q_heads as u32, 1), block_dim: (THREADS, 1, 1), shared_mem_bytes: (full_seq * 4) as u32 };
+        // Padded like `forward` above so vectorised tail loads stay in range.
+        let cfg = LaunchConfig { grid_dim: (batch as u32, num_q_heads as u32, 1), block_dim: (THREADS, 1, 1), shared_mem_bytes: ((full_seq + 8) * 4) as u32 };
         unsafe { launch.launch(cfg) }.map_err(|e| format!("Launching prefill attention kernel failed: {e}"))?;
         Ok(output_dev)
     }

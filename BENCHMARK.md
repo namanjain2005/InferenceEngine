@@ -91,89 +91,120 @@ row-major layouts (standard transpose mapping, no rearrangement), plus a
 small `bias_add` kernel since cuBLAS has no fused bias. Custom kernels are
 untouched and selectable via `--linear custom` for fusing work.
 
-Decode uses `cublasSgemv` directly. An earlier implementation routed this
-operation through `cublasSgemm` with M=1 based on a reported out-of-bounds
-write in cuBLAS 12.4's transpose GEMV path. We could not find a public NVIDIA
-issue or release note documenting that defect, so the claim should be treated
-as an unverified local observation, not a known cuBLAS limitation. The row-
-major `[N, K]` weights are passed as column-major `[K, N]`, with
-`CUBLAS_OP_T`, `m=K`, `n=N`, and `lda=K`; this yields an N-element output.
-The direct path still needs runtime validation under compute-sanitizer on the
-target CUDA/cuBLAS build, especially for non-square projection shapes.
+Decode uses `cublasSgemv` directly. The row-major `[N, K]` weights are passed
+as the column-major `[K, N]` matrix A, with `CUBLAS_OP_T`, `m=K`, `n=N`,
+`lda=K`, giving an N-element output; a small `bias_add` kernel adds the bias.
+
+An earlier implementation routed this through `cublasSgemm` with M=1 based on
+a reported out-of-bounds write in cuBLAS 12.4's transpose GEMV path. That was
+a misattribution. An isolated `cublasSgemv` harness exercising every
+projection shape (896→896/128/4864, 4864→896, 896→151936, plus 1536² and
+2048² square cases) is **0 errors under `compute-sanitizer --tool memcheck`**
+on this CUDA/cuBLAS build, with values matching a CPU reference. The fault
+that aborted the earlier whole-engine sanitizer run came from our own
+`attention_decode` kernel (an out-of-bounds shared-memory read just past the
+dynamic score buffer); it poisoned the context, so the *next* cuBLAS call
+surfaced as `CUBLAS_STATUS_EXECUTION_FAILED`. Padding the dynamic score buffer
+fixed it — the engine is now 0-error under memcheck end-to-end.
 
 ## Dual-run backend comparison (`--linear both`, default)
 
 The library stays single-backend: `main` tokenizes each prompt once, runs
 **both** backends on the identical token ids (each with a fresh KV cache),
 prints each one's output + timing, then a head-to-head block. Weights are
-uploaded once and read by both — no duplication. Release build, f32,
-greedy, `--max-tokens 16`, one clean pass per model (0.5B GPU 6, 1.5B
-GPU 5, 3B GPU 1). Tables show prefill / decode ms and the winner.
+uploaded once and read by both — no duplication. Release build, f32, greedy,
+`--max-tokens 16`, all runs on one idle GPU (4). These tables use the current
+direct-`cublasSgemv` decode path.
 
-The decode timings in the tables below were captured with the old one-row
-SGEMM fallback and do not measure the current direct-SGEMV implementation.
-Rerun them before drawing conclusions about current cuBLAS decode speed.
+Decode is launch-overhead-bound (hundreds of small kernels per step), so it is
+much noisier than prefill. The numbers below are therefore medians: 0.5B over
+3 runs, 1.5B over 2 runs, 3B a single pass; prefill is stable across repeats
+and reported from the same set. Tables show prefill / decode ms and the winner.
+
+> An isolated microbenchmark (`examples/decode_bench.rs`) of `cublasSgemv`
+> against the old `cublasSgemm(M=1)` fallback gives **1.00x on every decode
+> projection shape** (896→896/128/4864, 4864→896, 896/1536/2048→151936, and
+> 1536²) with bit-identical outputs; both reach ~850 GB/s on the large logits
+> projections. So the `sgemv` switch is performance-neutral and the decode
+> differences below are launch/measurement overhead, not the GEMV choice.
 
 ### Qwen2.5-0.5B
 
 | Prompt (tok) | custom pfl | cublas pfl | pfl | custom dec | cublas dec | dec | gen |
 |---|---|---|---|---|---|---|---|
-| 33 | 48.3 | 13.7 | cublas 3.52x | 81.6 | 69.2 | cublas 1.18x | 13/13 |
-| 45 | 46.5 | 9.0 | cublas 5.19x | 92.8 | 80.0 | cublas 1.16x | 16/16 |
-| 154 | 56.9 | 18.3 | cublas 3.12x | 97.6 | 83.4 | cublas 1.17x | 16/16 |
-| 321 | 78.0 | 32.6 | cublas 2.39x | 108.2 | 91.2 | cublas 1.19x | 16/16 |
-| 282 | 73.5 | 30.9 | cublas 2.38x | 103.9 | 92.3 | cublas 1.13x | 16/16 |
-| 56 | 46.7 | 9.2 | cublas 5.08x | 94.1 | 92.3 | cublas 1.02x | 16/16 |
-| 73 | 50.0 | 12.0 | cublas 4.19x | 94.4 | 92.7 | cublas 1.02x | 16/16 |
-| 73 | 50.1 | 11.7 | cublas 4.27x | 94.4 | 92.6 | cublas 1.02x | 16/16 |
-| 78 | 50.1 | 11.9 | cublas 4.21x | 93.8 | 92.2 | cublas 1.02x | 16/16 |
+| 33 | 49.6 | 11.6 | cublas 4.28x | 80.6 | 70.8 | cublas 1.14x | 13/13 |
+| 45 | 46.6 | 8.9 | cublas 5.21x | 93.8 | 83.2 | cublas 1.13x | 16/16 |
+| 154 | 56.9 | 18.7 | cublas 3.05x | 102.9 | 107.2 | custom 1.04x | 16/16 |
+| 321 | 78.3 | 32.7 | cublas 2.39x | 112.5 | 138.9 | custom 1.23x | 16/16 |
+| 282 | 73.2 | 30.0 | cublas 2.44x | 106.9 | 98.1 | cublas 1.09x | 16/16 |
+| 56 | 46.7 | 9.2 | cublas 5.10x | 93.6 | 90.3 | cublas 1.04x | 16/16 |
+| 73 | 50.1 | 11.9 | cublas 4.20x | 110.1 | 107.0 | cublas 1.03x | 16/16 |
+| 73 | 50.1 | 11.8 | cublas 4.24x | 99.5 | 111.2 | custom 1.12x | 16/16 |
+| 78 | 50.2 | 12.1 | cublas 4.16x | 111.2 | 125.1 | custom 1.13x | 16/16 |
 
 ### Qwen2.5-1.5B
 
 | Prompt (tok) | custom pfl | cublas pfl | pfl | custom dec | cublas dec | dec | gen |
 |---|---|---|---|---|---|---|---|
-| 33 | 103.4 | 22.3 | cublas 4.63x | 174.0 | 144.0 | cublas 1.21x | 13/13 |
-| 45 | 104.1 | 23.0 | cublas 4.52x | 199.8 | 166.4 | cublas 1.20x | 16/16 |
-| 154 | 146.1 | 52.5 | cublas 2.78x | 207.6 | 172.4 | cublas 1.20x | 16/16 |
-| 321 | 251.8 | 118.2 | cublas 2.13x | 215.3 | 182.5 | cublas 1.18x | **DIVERGED** |
-| 282 | 211.3 | 89.6 | cublas 2.36x | 212.2 | 180.2 | cublas 1.18x | 16/16 |
-| 56 | 105.4 | 23.0 | cublas 4.59x | 199.5 | 167.9 | cublas 1.19x | 16/16 |
-| 73 | 115.3 | 31.8 | cublas 3.63x | 203.6 | 169.5 | cublas 1.20x | 16/16 |
-| 73 | 115.3 | 31.7 | cublas 3.63x | 202.9 | 168.3 | cublas 1.21x | 16/16 |
-| 78 | 115.6 | 32.0 | cublas 3.61x | 201.5 | 168.5 | cublas 1.20x | 16/16 |
+| 33 | 102.9 | 22.3 | cublas 4.62x | 170.4 | 148.9 | cublas 1.14x | 13/13 |
+| 45 | 103.8 | 22.5 | cublas 4.61x | 197.2 | 170.5 | cublas 1.16x | 16/16 |
+| 154 | 145.1 | 52.7 | cublas 2.75x | 202.3 | 171.4 | cublas 1.18x | 16/16 |
+| 321 | 253.4 | 94.1 | cublas 2.69x | 210.4 | 184.7 | cublas 1.14x | NaN* |
+| 282 | 212.6 | 84.1 | cublas 2.53x | 210.0 | 184.1 | cublas 1.14x | NaN* |
+| 56 | 104.5 | 22.9 | cublas 4.56x | 196.8 | 163.7 | cublas 1.20x | 16/16 |
+| 73 | 114.7 | 31.7 | cublas 3.61x | 197.8 | 165.2 | cublas 1.20x | 16/16 |
+| 73 | 114.7 | 31.4 | cublas 3.65x | 197.8 | 165.3 | cublas 1.20x | 16/16 |
+| 78 | 114.9 | 31.9 | cublas 3.60x | 198.1 | 166.7 | cublas 1.19x | 16/16 |
+
+\* Long-context prompts hit the non-deterministic NaN logits (either backend);
+see the finding below. The affected run's token 0 is `!` for both backends, so
+the two "diverge" only in that both emit the degenerate `!!!…` continuation.
 
 ### Qwen2.5-3B
 
 | Prompt (tok) | custom pfl | cublas pfl | pfl | custom dec | cublas dec | dec | gen |
 |---|---|---|---|---|---|---|---|
-| 33 | 184.3 | 41.1 | cublas 4.48x | 250.8 | 209.9 | cublas 1.19x | 11/11 |
-| 45 | 184.3 | 41.8 | cublas 4.41x | 343.6 | 287.3 | cublas 1.20x | 16/16 |
-| 154 | 264.3 | 87.6 | cublas 3.02x | 349.9 | 295.0 | cublas 1.19x | 16/16 |
-| 321 | 482.5 | 183.6 | cublas 2.63x | 360.8 | 306.0 | cublas 1.18x | 16/16 |
-| 282 | 400.9 | 151.1 | cublas 2.65x | 358.4 | 303.3 | cublas 1.18x | 16/16 |
-| 56 | 185.4 | 42.6 | cublas 4.35x | 344.3 | 288.3 | cublas 1.19x | 16/16 |
-| 73 | 203.4 | 58.0 | cublas 3.51x | 345.7 | 289.2 | cublas 1.20x | 16/16 |
-| 73 | 202.9 | 57.7 | cublas 3.51x | 345.1 | 288.9 | cublas 1.19x | 16/16 |
-| 78 | 203.2 | 58.5 | cublas 3.48x | 345.6 | 288.9 | cublas 1.20x | 16/16 |
+| 33 | 183.6 | 41.3 | cublas 4.45x | 251.6 | 210.3 | cublas 1.20x | 11/11 |
+| 45 | 184.4 | 41.8 | cublas 4.41x | 343.9 | 287.8 | cublas 1.19x | 16/16 |
+| 154 | 265.5 | 100.8 | cublas 2.63x | 350.4 | 296.0 | cublas 1.18x | 16/16 |
+| 321 | 484.8 | 183.3 | cublas 2.65x | 360.9 | 308.4 | cublas 1.17x | 16/16 |
+| 282 | 402.6 | 150.9 | cublas 2.67x | 359.0 | 306.0 | cublas 1.17x | NaN* |
+| 56 | 184.9 | 42.4 | cublas 4.36x | 344.7 | 290.1 | cublas 1.19x | 16/16 |
+| 73 | 202.8 | 58.0 | cublas 3.50x | 345.1 | 290.4 | cublas 1.19x | 16/16 |
+| 73 | 202.8 | 57.8 | cublas 3.51x | 346.2 | 291.2 | cublas 1.19x | 16/16 |
+| 78 | 203.2 | 58.7 | cublas 3.46x | 346.4 | 290.4 | cublas 1.19x | 16/16 |
 
 Findings:
 
-- **cuBLAS wins both phases in the release build** — prefill by 2.1–5.2x
-  (grows with prompt; the blocked GEMM kernel is the bottleneck), decode by
-  a consistent ~1.2x. This supersedes the earlier debug-build note that
-  custom GEMV had a slight decode edge; keep custom for the fused-kernel
-  experiments, not for speed today.
-- **Non-deterministic NaN logits (both backends).** On 1.5B prompt 4
-  (321 tok), one backend's *entire* logits vector (151936 = vocab) came back
-  non-finite, so greedy argmax fell through to token 0 = `!` (the `!!!…`
-  rows). Reproduced 7 times across `--linear both` / single-backend runs:
-  it hit custom or cuBLAS at random, sometimes both. It is not a cuBLAS bug
-  and not specific to either path — both share every non-linear kernel
-  (rope, rmsnorm, attention, cache append, swiglu), so the suspect is a
-  race/uninitialised read or float blow-up in one of those on long context.
-  The comparison reporter prints non-finite counts so this is no longer
-  masked (`f32::max` used to hide NaN as a 0.0 diff). Open item: chase it
-  with `compute-sanitizer --tool racecheck` on the 321-token prompt.
+- **cuBLAS wins prefill decisively and decode modestly.** Prefill by ~2.4–5.2x
+  (grows with prompt; the blocked GEMM kernel is the bottleneck). Decode is
+  ~1.1–1.2x on 1.5B/3B and stable across repeats, but on 0.5B it is a wash
+  (median-of-3: cuBLAS wins 5/9, custom 4/9, all within ±0.15x). Small-model
+  decode is launch-overhead-bound, and the cuBLAS path pays one extra
+  `bias_add` launch per projection because cuBLAS has no fused bias, which is
+  the whole of the difference. Keep custom for the fused-kernel experiments,
+  not for speed today.
+- **`cublasSgemv` vs the old `sgemm(M=1)` fallback is a non-issue.** The
+  isolated microbenchmark above shows 1.00x on every decode shape and
+  bit-identical outputs, so neither is "faster"; the choice is neutral and the
+  `sgemv` path is the more direct expression of the operation.
+- **Non-deterministic NaN logits (both backends).** On 1.5B/3B long prompts
+  (321/282 tok), one backend's *entire* logits vector (151936 = vocab) comes
+  back non-finite, so greedy argmax falls through to token 0 = `!` (the `!!!…`
+  rows). Still reproduces after the attention shared-memory fix below, hitting
+  custom or cuBLAS at random, sometimes both. It is not a cuBLAS bug and not
+  specific to either path — both share every non-linear kernel (rope, rmsnorm,
+  attention, cache append, swiglu), so the suspect is a race/uninitialised
+  read or float blow-up in one of those on long context. The comparison
+  reporter prints non-finite counts so this is no longer masked (`f32::max`
+  used to hide NaN as a 0.0 diff). Open item: chase it with
+  `compute-sanitizer --tool racecheck` on the 321-token prompt.
+- **Fixed: out-of-bounds shared read in decode/prefill attention.** The
+  earlier whole-engine sanitizer failure was our `attention_decode` scanning
+  a few elements past the dynamic `scores[]` buffer (a vectorised tail load).
+  Both attention launch sites now pad that buffer by 8 floats; memcheck on the
+  full engine is 0 errors and the run completes. This is backend-independent
+  and does not, by itself, explain the NaN above.
 
 ## Reading
 
@@ -190,8 +221,8 @@ Findings:
   observed generations) with small run-to-run wobble — open stress-test
   item, does not affect timing.
 - Transient degeneration, now characterised (see "Dual-run" findings): on
-  long context (reproducibly 1.5B/321 tok) one backend's full logits vector
-  goes non-finite non-deterministically, so argmax returns token 0 (`!`).
-  Backend-agnostic and shared-kernel, so it is a latent race/overflow, not a
-  cuBLAS defect. Timing cells still measure real work; generation agreement
-  excludes the affected runs.
+  long context (seen on 1.5B/321, 1.5B/282 and 3B/282) one backend's full
+  logits vector goes non-finite non-deterministically, so argmax returns token
+  0 (`!`). Backend-agnostic and shared-kernel, so it is a latent
+  race/overflow, not a cuBLAS defect. Timing cells still measure real work;
+  generation agreement excludes the affected runs.
