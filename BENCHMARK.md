@@ -107,6 +107,33 @@ dynamic score buffer); it poisoned the context, so the *next* cuBLAS call
 surfaced as `CUBLAS_STATUS_EXECUTION_FAILED`. Padding the dynamic score buffer
 fixed it — the engine is now 0-error under memcheck end-to-end.
 
+### Where cuBLAS decode time goes: the missing bias fusion
+
+The custom GEMV kernel (`layer/linear.cu`) applies the projection bias inside
+the same kernel: it reads `bias[n]` once and folds it into the output, so one
+launch does matmul + bias. **cuBLAS has no fused-bias entry point**, so
+`CublasLinear` has to issue a *separate* `bias_add` kernel after every
+projection (`layer/bias.cu`).
+
+On Qwen2.5-0.5B that is 7 projections/layer × 24 layers + 1 final logits =
+**169 extra kernel launches per decode step**, ~2.5k extra launches over a
+15-step generation. Decode is already launch-bound (hundreds of tiny kernels
+per step), so this fixed cost is squarely in the critical path. It is the
+*reason* the cuBLAS decode advantage shrinks on the small model:
+
+- 0.5B (hidden 896, small projections): the extra `bias_add` launches are a
+  large fraction of step time, so cuBLAS decode is a wash — the kernels
+  themselves are equal (see the GEMV-vs-SGEMM microbench), the difference is
+  purely the un-fused bias.
+- 1.5B/3B (hidden 1536/2048, much larger projections): each projection's
+  matmul is big enough to amortise the extra launch, so cuBLAS stays ~1.2x
+  ahead.
+
+Net: the cuBLAS decode path is paying for the bias fusion it cannot do
+in-line. A fused-bias Epilogue for cuBLAS (or cuBLASLt with a bias epilogue)
+would remove this cost; until then, the custom kernel keeps the fused-bias
+advantage at small hidden sizes.
+
 ## Dual-run backend comparison (`--linear both`, default)
 
 The library stays single-backend: `main` tokenizes each prompt once, runs
@@ -149,16 +176,18 @@ and reported from the same set. Tables show prefill / decode ms and the winner.
 | 33 | 102.9 | 22.3 | cublas 4.62x | 170.4 | 148.9 | cublas 1.14x | 13/13 |
 | 45 | 103.8 | 22.5 | cublas 4.61x | 197.2 | 170.5 | cublas 1.16x | 16/16 |
 | 154 | 145.1 | 52.7 | cublas 2.75x | 202.3 | 171.4 | cublas 1.18x | 16/16 |
-| 321 | 253.4 | 94.1 | cublas 2.69x | 210.4 | 184.7 | cublas 1.14x | NaN* |
-| 282 | 212.6 | 84.1 | cublas 2.53x | 210.0 | 184.1 | cublas 1.14x | NaN* |
+| 321 | 253.4 | 94.1 | cublas 2.69x | 210.4 | 184.7 | cublas 1.14x | 16/16 |
+| 282 | 212.6 | 84.1 | cublas 2.53x | 210.0 | 184.1 | cublas 1.14x | 16/16 |
 | 56 | 104.5 | 22.9 | cublas 4.56x | 196.8 | 163.7 | cublas 1.20x | 16/16 |
 | 73 | 114.7 | 31.7 | cublas 3.61x | 197.8 | 165.2 | cublas 1.20x | 16/16 |
 | 73 | 114.7 | 31.4 | cublas 3.65x | 197.8 | 165.3 | cublas 1.20x | 16/16 |
 | 78 | 114.9 | 31.9 | cublas 3.60x | 198.1 | 166.7 | cublas 1.19x | 16/16 |
 
-\* Long-context prompts hit the non-deterministic NaN logits (either backend);
-see the finding below. The affected run's token 0 is `!` for both backends, so
-the two "diverge" only in that both emit the degenerate `!!!…` continuation.
+Note: the long-context rows previously hit the non-deterministic NaN logits
+(either backend). That attention-softmax race is now **fixed** (see the finding
+below); re-run after the fix these rows give `generated tokens: IDENTICAL
+(16/16)` with 0 non-finite. The timing columns are unchanged — the race
+corrupted the logits, not the timed work.
 
 ### Qwen2.5-3B
 
@@ -168,7 +197,7 @@ the two "diverge" only in that both emit the degenerate `!!!…` continuation.
 | 45 | 184.4 | 41.8 | cublas 4.41x | 343.9 | 287.8 | cublas 1.19x | 16/16 |
 | 154 | 265.5 | 100.8 | cublas 2.63x | 350.4 | 296.0 | cublas 1.18x | 16/16 |
 | 321 | 484.8 | 183.3 | cublas 2.65x | 360.9 | 308.4 | cublas 1.17x | 16/16 |
-| 282 | 402.6 | 150.9 | cublas 2.67x | 359.0 | 306.0 | cublas 1.17x | NaN* |
+| 282 | 402.6 | 150.9 | cublas 2.67x | 359.0 | 306.0 | cublas 1.17x | 16/16 |
 | 56 | 184.9 | 42.4 | cublas 4.36x | 344.7 | 290.1 | cublas 1.19x | 16/16 |
 | 73 | 202.8 | 58.0 | cublas 3.50x | 345.1 | 290.4 | cublas 1.19x | 16/16 |
 | 73 | 202.8 | 57.8 | cublas 3.51x | 346.2 | 291.2 | cublas 1.19x | 16/16 |
@@ -188,23 +217,35 @@ Findings:
   isolated microbenchmark above shows 1.00x on every decode shape and
   bit-identical outputs, so neither is "faster"; the choice is neutral and the
   `sgemv` path is the more direct expression of the operation.
-- **Non-deterministic NaN logits (both backends).** On 1.5B/3B long prompts
-  (321/282 tok), one backend's *entire* logits vector (151936 = vocab) comes
-  back non-finite, so greedy argmax falls through to token 0 = `!` (the `!!!…`
-  rows). Still reproduces after the attention shared-memory fix below, hitting
-  custom or cuBLAS at random, sometimes both. It is not a cuBLAS bug and not
-  specific to either path — both share every non-linear kernel (rope, rmsnorm,
-  attention, cache append, swiglu), so the suspect is a race/uninitialised
-  read or float blow-up in one of those on long context. The comparison
-  reporter prints non-finite counts so this is no longer masked (`f32::max`
-  used to hide NaN as a 0.0 diff). Open item: chase it with
-  `compute-sanitizer --tool racecheck` on the 321-token prompt.
-- **Fixed: out-of-bounds shared read in decode/prefill attention.** The
-  earlier whole-engine sanitizer failure was our `attention_decode` scanning
-  a few elements past the dynamic `scores[]` buffer (a vectorised tail load).
-  Both attention launch sites now pad that buffer by 8 floats; memcheck on the
-  full engine is 0 errors and the run completes. This is backend-independent
-  and does not, by itself, explain the NaN above.
+- **Fixed: non-deterministic NaN logits (both backends).** On 1.5B/3B long
+  prompts (321/282 tok), one backend's *entire* logits vector (151936 = vocab)
+  would come back non-finite, so greedy argmax fell through to token 0 = `!`
+  (the `!!!…` rows). Root cause: in both attention kernels, `max_val =
+  reduction[0]` is read by every thread and `reduction[]` is then reused for
+  the per-thread `local_sum` **with no barrier in between**. On Volta's
+  independent thread scheduling a fast thread can store `local_sum` into
+  `reduction[0]` before a slower thread has read the true row maximum, so that
+  thread sees a tiny `max_val`; `expf(score - max_val)` then overflows to
+  `+inf`, the sum becomes `inf`, `inv_sum` becomes 0 and `inf * 0` turns the
+  whole head (one 128-wide `(row, head)` block) into NaN — which then poisons
+  the residual stream and the full logits vector. It hit custom or cuBLAS at
+  random because both share the identical attention kernel and only their GEMM
+  timing (and hence the race window) differed. `compute-sanitizer --tool
+  racecheck` flagged it as a WAR hazard at `__shared__ 0x0` (read thread 1 vs
+  write thread 0). Fix: a `__syncthreads()` after reading `max_val`, so every
+  thread has read the maximum before `reduction[]` is overwritten. Verified by
+  replaying the captured layer-0 inputs through the NVRTC-compiled kernel:
+  **15/60 launches produced NaN before the barrier, 0/80 after**, and full-engine
+  runs are now bit-stable instead of varying run-to-run. The comparison reporter
+  keeps printing non-finite counts so a regression can't hide (`f32::max` used
+  to mask NaN as a 0.0 diff).
+- **Fixed: out-of-bounds shared read in decode/prefill attention.** An earlier
+  whole-engine sanitizer failure was our `attention_decode` scanning a few
+  elements past the dynamic `scores[]` buffer (a vectorised tail load). Both
+  attention launch sites now pad that buffer by 8 floats; memcheck on the full
+  engine is 0 errors and the run completes. This was a separate defect from the
+  NaN race above (the OOB read is in-bounds-but-stale after padding, which does
+  not by itself produce NaN).
 
 ## Reading
 
@@ -216,13 +257,14 @@ Findings:
 - GEMM prefill time stays roughly flat as prompts grow (weight tile reuse
   across 32 rows); the loop scales linearly.
 - Correctness: 0.5B generations 9/9 identical, batched bit-exact 9/9, GEMM
-  twice bit-exact on the longest prompts. On 1.5B/3B long prompts, max-abs
-  diffs reach ~0.1-0.6 in rare runs (tail logits; top-1 stable in all
-  observed generations) with small run-to-run wobble — open stress-test
-  item, does not affect timing.
-- Transient degeneration, now characterised (see "Dual-run" findings): on
-  long context (seen on 1.5B/321, 1.5B/282 and 3B/282) one backend's full
-  logits vector goes non-finite non-deterministically, so argmax returns token
-  0 (`!`). Backend-agnostic and shared-kernel, so it is a latent
-  race/overflow, not a cuBLAS defect. Timing cells still measure real work;
-  generation agreement excludes the affected runs.
+  twice bit-exact on the longest prompts. The earlier 1.5B/3B long-prompt
+  run-to-run wobble (max-abs diffs up to ~0.1-0.6 on tail logits) was the
+  attention-softmax race described in the "Dual-run" findings; after the fix
+  those runs are bit-stable.
+- Transient degeneration, now **fixed** (see "Dual-run" findings): on long
+  context (seen on 1.5B/321, 1.5B/282 and 3B/282) one backend's full logits
+  vector went non-finite non-deterministically, so argmax returned token 0
+  (`!`). It was a WAR race in the attention softmax reduction, shared by both
+  backends (not a cuBLAS defect); a `__syncthreads()` after reading the row
+  maximum fixes it, and runs are now bit-stable. Timing cells measure real work
+  either way and are unaffected.
