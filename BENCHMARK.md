@@ -91,12 +91,15 @@ row-major layouts (standard transpose mapping, no rearrangement), plus a
 small `bias_add` kernel since cuBLAS has no fused bias. Custom kernels are
 untouched and selectable via `--linear custom` for fusing work.
 
-Gotcha found while wiring this up: **cublas 12.4 `cublasSgemv` transpose
-path writes past `y` for K != N shapes** (compute-sanitizer:
-`Invalid __global__ write` in `gemv2T_kernel`; dmesg Xid 31 PDE faults +
-Xid 43). Decode therefore routes through `sgemm` with M=1, which is
-sanitizer-clean (0 errors) and value-exact on all shapes. Revisit if the
-CUDA/cuBLAS version changes.
+Decode uses `cublasSgemv` directly. An earlier implementation routed this
+operation through `cublasSgemm` with M=1 based on a reported out-of-bounds
+write in cuBLAS 12.4's transpose GEMV path. We could not find a public NVIDIA
+issue or release note documenting that defect, so the claim should be treated
+as an unverified local observation, not a known cuBLAS limitation. The row-
+major `[N, K]` weights are passed as column-major `[K, N]`, with
+`CUBLAS_OP_T`, `m=K`, `n=N`, and `lda=K`; this yields an N-element output.
+The direct path still needs runtime validation under compute-sanitizer on the
+target CUDA/cuBLAS build, especially for non-square projection shapes.
 
 ## Dual-run backend comparison (`--linear both`, default)
 
@@ -106,6 +109,10 @@ prints each one's output + timing, then a head-to-head block. Weights are
 uploaded once and read by both — no duplication. Release build, f32,
 greedy, `--max-tokens 16`, one clean pass per model (0.5B GPU 6, 1.5B
 GPU 5, 3B GPU 1). Tables show prefill / decode ms and the winner.
+
+The decode timings in the tables below were captured with the old one-row
+SGEMM fallback and do not measure the current direct-SGEMV implementation.
+Rerun them before drawing conclusions about current cuBLAS decode speed.
 
 ### Qwen2.5-0.5B
 

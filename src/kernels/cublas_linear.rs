@@ -1,5 +1,5 @@
 use super::LinearOp;
-use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig};
+use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig, Gemv, GemvConfig};
 use cudarc::cublas::sys;
 use cudarc::driver::{CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::compile_ptx;
@@ -93,12 +93,28 @@ impl LinearOp for CublasLinear {
         in_features: usize,
         out_features: usize,
     ) -> Result<CudaSlice<f32>, String> {
-        // NOTE: deliberately routed through sgemm with batch=1 instead of
-        // cublasSgemv: cublas 12.4's sgemv-transpose path writes past the
-        // y buffer for K != N shapes (compute-sanitizer: Invalid __global__
-        // write in gemv2T_kernel; dmesg Xid 31 PDE faults), heap-corrupting
-        // later calls. sgemm with M=1 is sanitizer-clean and value-exact.
-        self.gemm(stream, input, weights, bias, 1, in_features, out_features)
+        Self::check(input.len(), weights.len(), bias.map(|b| b.len()), 1, in_features, out_features)?;
+        let mut output = stream.alloc_zeros::<f32>(out_features)
+            .map_err(|e| format!("Allocating cuBLAS gemv output failed: {e}"))?;
+
+        // The row-major [out_features, in_features] weight buffer is the
+        // column-major [in_features, out_features] matrix A. Therefore
+        // A^T * input produces the desired output vector. cuBLAS GEMV's
+        // output length for OP_T is n, so allocate exactly out_features.
+        let cfg = GemvConfig {
+            trans: sys::cublasOperation_t::CUBLAS_OP_T,
+            m: in_features as i32,
+            n: out_features as i32,
+            alpha: 1.0,
+            lda: in_features as i32,
+            incx: 1,
+            beta: 0.0,
+            incy: 1,
+        };
+        unsafe { self.blas.gemv(cfg, weights, input, &mut output) }
+            .map_err(|e| format!("Launching cublasSgemv failed: {e:?}"))?;
+        self.add_bias(stream, &mut output, bias, 1, out_features)?;
+        Ok(output)
     }
 
     fn gemm(

@@ -104,12 +104,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. Query nvidia-smi and select GPU
-    println!("\n[1/5] Checking NVIDIA GPUs via nvidia-smi...");
-    let gpus = query_nvidia_smi().map_err(|e| format!("Failed to query GPUs: {}", e))?;
-    let selected_gpu =
-        select_gpu(args.gpu, &gpus).map_err(|e| format!("GPU selection error: {}", e))?;
-    print_gpu_table(&gpus, selected_gpu);
+    // 1. Select GPU. An explicit index can be validated by CUDA itself, so
+    // don't require nvidia-smi in that case (it may be unavailable in a
+    // container even when the CUDA driver is accessible).
+    println!("\n[1/5] Selecting NVIDIA GPU...");
+    let selected_gpu = if let Some(gpu) = args.gpu {
+        println!("Using explicitly requested GPU {}.", gpu);
+        gpu
+    } else {
+        println!("Checking available GPUs via nvidia-smi...");
+        let gpus = query_nvidia_smi().map_err(|e| format!("Failed to query GPUs: {}", e))?;
+        let selected = select_gpu(None, &gpus)
+            .map_err(|e| format!("GPU selection error: {}", e))?;
+        print_gpu_table(&gpus, selected);
+        selected
+    };
 
     // 2. Initialize CUDA device
     println!("[2/5] Initializing CUDA Context on GPU {}...", selected_gpu);
