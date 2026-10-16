@@ -539,8 +539,30 @@ fn run_backend<M: ModelBackend>(
 fn max_abs_diff(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
+        .filter(|(x, y)| x.is_finite() && y.is_finite())
         .map(|(x, y)| (x - y).abs())
         .fold(0.0f32, f32::max)
+}
+
+/// Finite max-abs-diff plus non-finite counts for each side. `f32::max`
+/// silently drops NaN, so a NaN-vs-finite pair would otherwise report a
+/// misleading 0.0 diff; this keeps the comparison honest.
+fn summarize_logits(a: &[f32], b: &[f32]) -> (f32, usize, usize) {
+    let mut max_diff = 0.0f32;
+    let mut non_finite_a = 0usize;
+    let mut non_finite_b = 0usize;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        if !x.is_finite() {
+            non_finite_a += 1;
+        }
+        if !y.is_finite() {
+            non_finite_b += 1;
+        }
+        if x.is_finite() && y.is_finite() {
+            max_diff = max_diff.max((x - y).abs());
+        }
+    }
+    (max_diff, non_finite_a, non_finite_b)
 }
 
 /// "A 1.39x faster" phrasing for whichever of the two is quicker.
@@ -616,9 +638,11 @@ fn print_backend_comparison(outcomes: &[PromptOutcome]) {
                 other.tokens.len()
             );
         }
+        let (max_diff, non_finite_base, non_finite_other) =
+            summarize_logits(&base.prefill_logits, &other.prefill_logits);
         println!(
-            "  prefill last-token logits max abs diff: {:.3e}",
-            max_abs_diff(&base.prefill_logits, &other.prefill_logits)
+            "  prefill last-token logits: max abs diff (finite) {:.3e} | non-finite: {}={}, {}={}",
+            max_diff, base.name, non_finite_base, other.name, non_finite_other
         );
         println!(
             "  decoded text: {}",
