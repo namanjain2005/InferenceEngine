@@ -6,7 +6,7 @@ mod safetensors;
 
 use clap::Parser;
 use config::ModelConfig;
-use cudarc::driver::CudaStream;
+use cudarc::driver::{CudaSlice, CudaStream};
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::cublas_linear::CublasLinear;
 use kernels::linear::LinearKernel;
@@ -66,9 +66,10 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     bench_repeat: usize,
 
-    /// Linear backend: cublas (sgemm/sgemv, default) or custom
-    /// (hand-rolled GEMV/GEMM kernels, kept for fusing experiments).
-    #[arg(long, default_value = "cublas")]
+    /// Which linear backends to run per prompt: `both` (default; custom and
+    /// cuBLAS on the same input, outputs + timings compared), `custom`
+    /// (hand-rolled GEMV/GEMM kernels only), or `cublas` (sgemm only).
+    #[arg(long, default_value = "both")]
     linear: String,
 }
 
@@ -116,14 +117,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let linear_custom = LinearKernel::new(&cuda_ctx)?;
     let linear_cublas = CublasLinear::new(&cuda_ctx, cuda_stream.clone())?;
     let backend = args.linear.to_lowercase();
-    if !["custom", "cublas"].contains(&backend.as_str()) {
-        return Err(format!("Unknown --linear '{}': expected custom or cublas", args.linear).into());
+    if !["custom", "cublas", "both"].contains(&backend.as_str()) {
+        return Err(format!("Unknown --linear '{}': expected custom, cublas, or both", args.linear).into());
     }
-    let linear: &dyn LinearOp = match backend.as_str() {
-        "custom" => &linear_custom,
-        _ => &linear_cublas,
+    // Default `both`: run the custom kernels and cuBLAS on the same input and
+    // compare outputs + timings on every prompt, so the hand-rolled path is
+    // always measured head-to-head against cuBLAS. `custom`/`cublas` force a
+    // single backend (kept for fusing/experiment work).
+    let backends: Vec<(&str, &dyn LinearOp)> = match backend.as_str() {
+        "custom" => vec![("custom", &linear_custom)],
+        "cublas" => vec![("cublas", &linear_cublas)],
+        _ => vec![("custom", &linear_custom), ("cublas", &linear_cublas)],
     };
-    println!("   -> Linear backend: {backend} (custom kernels kept for fusing work).");
+    println!(
+        "   -> Linear backend(s): {}",
+        backends.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+    );
     let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
     let attention = AttentionKernel::new(&cuda_ctx)?;
@@ -177,28 +186,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let start_load = std::time::Instant::now();
-    let model = Qwen2Model::load(&mut st, config.clone(), linear, &cuda_stream)?;
+    // Weights are uploaded once and shared by every backend (identical
+    // row-major layout), so the two paths never duplicate resident weights.
+    let model = Qwen2Model::load(&mut st, config.clone(), backends[0].1, &cuda_stream)?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
-    // Warmup: run every prefill path once on throwaway caches so timed runs
-    // don't pay first-launch clock/cache ramp. Decode still uses GEMV only.
+    // Warmup: run every prefill path once per backend on throwaway caches so
+    // timed runs don't pay first-launch clock/cache ramp. Decode uses GEMV.
     {
-        let mut cache = model.new_cache(&cuda_stream, 4)?;
         let tiny = vec![config.bos_token_id, config.bos_token_id];
-        // Token loop warmup (last-logits form, same as the timed baseline).
-        for (pos, &tok) in tiny.iter().enumerate() {
-            if pos + 1 < tiny.len() {
-                model.forward_token_hidden(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
-            } else {
-                model.forward_token(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+        for &(name, linear) in &backends {
+            let mut cache = model.new_cache(&cuda_stream, 4)?;
+            // Token loop warmup (last-logits form, same as the timed baseline).
+            for (pos, &tok) in tiny.iter().enumerate() {
+                if pos + 1 < tiny.len() {
+                    model.forward_token_hidden(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                } else {
+                    model.forward_token(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                }
             }
+            let mut cache_b = model.new_cache(&cuda_stream, 4)?;
+            let _ = model.forward_prefill(&tiny, 0, &mut cache_b, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
+            let mut cache_g = model.new_cache(&cuda_stream, 4)?;
+            let _ = model.forward_prefill(&tiny, 0, &mut cache_g, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
+            println!("   -> Warmup done for backend {name}.");
         }
-        let mut cache_b = model.new_cache(&cuda_stream, 4)?;
-        let _ = model.forward_prefill(&tiny, 0, &mut cache_b, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
-        let mut cache_g = model.new_cache(&cuda_stream, 4)?;
-        let _ = model.forward_prefill(&tiny, 0, &mut cache_g, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
         cuda_stream.synchronize().map_err(|e| format!("Warmup synchronize failed: {e}"))?;
-        println!("   -> Warmup (all prefill paths) done.");
     }
 
     // 5. Run the full built-in suite unless a one-off prompt was supplied.
@@ -216,27 +229,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("Unknown --prefill '{}': expected gemv-loop, batched-gemv, or gemm", args.prefill).into());
     }
     for (index, (label, prompt)) in prompts.iter().enumerate() {
-        if let Err(error) = run_prompt(
-            index + 1,
-            prompts.len(),
-            label,
-            prompt,
-            args.max_tokens,
-            &prefill,
-            args.bench_prefill,
-            args.bench_repeat.max(1),
-            &tokenizer,
-            &model,
-            &argmax,
-            linear,
-            &rmsnorm,
-            &swiglu,
-            &attention,
-            &vector,
-            &cuda_stream,
-        ) {
-            return Err(format!("Prompt '{label}' failed: {error}").into());
+        println!("\n--- Prompt {}/{}: {} ---", index + 1, prompts.len(), label);
+        let host_tokens = tokenize_prompt(&tokenizer, prompt)?;
+        println!("Input prompt:\n{prompt}");
+        println!(
+            "Input tokens: {} (identical input fed to every backend)",
+            host_tokens.len()
+        );
+
+        // Run every requested backend on the exact same input tokens, then
+        // print the generated outputs, timings, and a head-to-head check.
+        let mut outcomes = Vec::with_capacity(backends.len());
+        for &(backend_name, linear) in &backends {
+            let outcome = run_backend(
+                backend_name,
+                label,
+                &model,
+                linear,
+                &tokenizer,
+                &argmax,
+                &rmsnorm,
+                &swiglu,
+                &attention,
+                &vector,
+                &cuda_stream,
+                &host_tokens,
+                args.max_tokens,
+                &prefill,
+                args.bench_prefill,
+                args.bench_repeat.max(1),
+            )
+            .map_err(|error| {
+                format!("Prompt '{label}' failed on backend '{backend_name}': {error}")
+            })?;
+            outcomes.push(outcome);
         }
+        print_backend_comparison(&outcomes);
     }
 
     println!("\n============================================================");
@@ -277,29 +305,22 @@ fn base_prompts() -> Vec<(String, String)> {
     prompts
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_prompt<M: ModelBackend>(
-    index: usize,
-    total: usize,
-    label: &str,
-    prompt: &str,
-    max_tokens: usize,
-    prefill_mode: &str,
-    bench_prefill: bool,
-    bench_repeat: usize,
-    tokenizer: &Tokenizer,
-    model: &M,
-    argmax: &ArgmaxKernel,
-    linear: &dyn LinearOp,
-    rmsnorm: &RmsNormKernel,
-    swiglu: &SwiGluKernel,
-    attention: &AttentionKernel,
-    vector: &VectorKernels,
-    stream: &Arc<CudaStream>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config = model.config();
-    println!("\n--- Prompt {index}/{total}: {label} ---");
+/// One backend's full prefill + decode result for a single prompt. Lives in
+/// `main` only: the library (model/kernels) still takes a single `LinearOp`.
+struct PromptOutcome {
+    name: String,
+    tokens: Vec<u32>,
+    text: String,
+    decode_steps: usize,
+    prefill_time: std::time::Duration,
+    decode_time: std::time::Duration,
+    /// Last-token prefill logits, kept on host for the cross-backend diff.
+    prefill_logits: Vec<f32>,
+}
 
+/// Tokenize a prompt with the Qwen chat template into the exact token ids
+/// every backend will consume.
+fn tokenize_prompt(tokenizer: &Tokenizer, prompt: &str) -> Result<Vec<usize>, String> {
     let formatted_prompt = format!(
         "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
         prompt
@@ -307,49 +328,73 @@ fn run_prompt<M: ModelBackend>(
     let encoding = tokenizer
         .encode(formatted_prompt.as_str(), false)
         .map_err(|e| format!("Tokenization failed: {e}"))?;
-    let input_tokens = encoding.get_ids();
-    if input_tokens.is_empty() {
-        return Err(format!("Prompt {label} produced no input tokens").into());
+    let ids = encoding.get_ids();
+    if ids.is_empty() {
+        return Err("Prompt produced no input tokens".to_string());
     }
-    println!("Input tokens: {}", input_tokens.len());
+    Ok(ids.iter().map(|&t| t as usize).collect())
+}
 
-    let max_seq_len = input_tokens
+/// Run one linear backend over shared `host_tokens`: prefill (using
+/// `prefill_mode` / optional micro-bench) then greedy decode. Prints the
+/// backend's own output and timing and returns everything needed to compare
+/// it against the other backends.
+#[allow(clippy::too_many_arguments)]
+fn run_backend<M: ModelBackend>(
+    backend: &str,
+    label: &str,
+    model: &M,
+    linear: &dyn LinearOp,
+    tokenizer: &Tokenizer,
+    argmax: &ArgmaxKernel,
+    rmsnorm: &RmsNormKernel,
+    swiglu: &SwiGluKernel,
+    attention: &AttentionKernel,
+    vector: &VectorKernels,
+    stream: &Arc<CudaStream>,
+    host_tokens: &[usize],
+    max_tokens: usize,
+    prefill_mode: &str,
+    bench_prefill: bool,
+    bench_repeat: usize,
+) -> Result<PromptOutcome, String> {
+    let config = model.config();
+    let max_seq_len = host_tokens
         .len()
         .checked_add(max_tokens)
         .ok_or("Requested sequence length overflow")?;
-    let host_tokens: Vec<usize> = input_tokens.iter().map(|&t| t as usize).collect();
 
     // Prefill helpers. The token-loop baseline projects logits for the last
     // token only (via forward_token_hidden for the rest), matching the work
-    // the batched paths do; the previous system computed throwaway logits
-    // per token, which the `main`-branch column still measures as-shipped.
-    let prefill_loop = |cache: &mut M::Cache| -> Result<(cudarc::driver::CudaSlice<f32>, std::time::Duration), String> {
-        let start = std::time::Instant::now();
-        let mut last = None;
-        for (pos, &tok) in host_tokens.iter().enumerate() {
-            if pos + 1 < host_tokens.len() {
-                model.forward_token_hidden(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
-            } else {
-                last = Some(model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?);
+    // the batched paths do.
+    let prefill_loop =
+        |cache: &mut M::Cache| -> Result<(CudaSlice<f32>, std::time::Duration), String> {
+            let start = std::time::Instant::now();
+            let mut last = None;
+            for (pos, &tok) in host_tokens.iter().enumerate() {
+                if pos + 1 < host_tokens.len() {
+                    model.forward_token_hidden(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
+                } else {
+                    last = Some(model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?);
+                }
             }
-        }
-        stream.synchronize().map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
-        Ok((last.ok_or("Prompt prefill produced no logits")?, start.elapsed()))
-    };
-    let prefill_batched = |cache: &mut M::Cache, use_gemm: bool| -> Result<(cudarc::driver::CudaSlice<f32>, std::time::Duration), String> {
-        let start = std::time::Instant::now();
-        let logits = model.forward_prefill(&host_tokens, 0, cache, linear, rmsnorm, swiglu, attention, vector, stream, use_gemm)?;
-        stream.synchronize().map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
-        Ok((logits, start.elapsed()))
-    };
-    /// Median of `n` timed runs on fresh caches.
+            stream.synchronize().map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
+            Ok((last.ok_or("Prompt prefill produced no logits")?, start.elapsed()))
+        };
+    let prefill_batched =
+        |cache: &mut M::Cache, use_gemm: bool| -> Result<(CudaSlice<f32>, std::time::Duration), String> {
+            let start = std::time::Instant::now();
+            let logits = model.forward_prefill(host_tokens, 0, cache, linear, rmsnorm, swiglu, attention, vector, stream, use_gemm)?;
+            stream.synchronize().map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
+            Ok((logits, start.elapsed()))
+        };
     let median_of = |mut dts: Vec<std::time::Duration>| -> std::time::Duration {
         dts.sort();
         dts[dts.len() / 2]
     };
 
     let mut cache = model.new_cache(stream, max_seq_len)?;
-    let (prefill_time, mut next_token) = if bench_prefill {
+    let (prefill_time, mut next_token, prefill_logits) = if bench_prefill {
         let reps = bench_repeat;
         // Kept run per path: logits for the diff check + cache for decode.
         let mut cache_loop = model.new_cache(stream, max_seq_len)?;
@@ -371,47 +416,61 @@ fn run_prompt<M: ModelBackend>(
             let mut c = model.new_cache(stream, max_seq_len)?;
             gemm_dts.push(prefill_batched(&mut c, true)?.1);
         }
-        let (dt_loop, dt_bgemv, dt_gemm) = (median_of(loop_dts), median_of(bgemv_dts), median_of(gemm_dts));
+        let (dt_loop, dt_bgemv, dt_gemm) =
+            (median_of(loop_dts), median_of(bgemv_dts), median_of(gemm_dts));
         let host_loop = stream.clone_dtoh(&logits_loop).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
         let host_bgemv = stream.clone_dtoh(&logits_bgemv).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
         let host_gemm = stream.clone_dtoh(&logits_gemm).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
-        let max_diff = |a: &[f32], b: &[f32]| a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
         println!(
-            "Prefill benchmark ({} tokens): gemv-loop {:.2?} | batched-gemv {:.2?} ({:.2}x) diff {:.2e} | gemm {:.2?} ({:.2}x) diff {:.2e}",
+            "[{backend}] Prefill benchmark ({} tokens): gemv-loop {:.2?} | batched-gemv {:.2?} ({:.2}x) diff {:.2e} | gemm {:.2?} ({:.2}x) diff {:.2e}",
             host_tokens.len(),
             dt_loop,
             dt_bgemv,
             dt_loop.as_secs_f64() / dt_bgemv.as_secs_f64().max(1e-9),
-            max_diff(&host_loop, &host_bgemv),
+            max_abs_diff(&host_loop, &host_bgemv),
             dt_gemm,
             dt_loop.as_secs_f64() / dt_gemm.as_secs_f64().max(1e-9),
-            max_diff(&host_loop, &host_gemm),
+            max_abs_diff(&host_loop, &host_gemm),
         );
         // Decode from the requested mode's cache so generation matches it.
-        let (dt, tok, chosen) = match prefill_mode {
-            "gemv-loop" => (dt_loop, select_token(argmax, stream, &logits_loop)?, cache_loop),
-            "batched-gemv" => (dt_bgemv, select_token(argmax, stream, &logits_bgemv)?, cache_bgemv),
-            _ => (dt_gemm, select_token(argmax, stream, &logits_gemm)?, cache_gemm),
-        };
-        cache = chosen;
-        (dt, tok)
+        match prefill_mode {
+            "gemv-loop" => {
+                let tok = select_token(argmax, stream, &logits_loop)?;
+                cache = cache_loop;
+                (dt_loop, tok, host_loop)
+            }
+            "batched-gemv" => {
+                let tok = select_token(argmax, stream, &logits_bgemv)?;
+                cache = cache_bgemv;
+                (dt_bgemv, tok, host_bgemv)
+            }
+            _ => {
+                let tok = select_token(argmax, stream, &logits_gemm)?;
+                cache = cache_gemm;
+                (dt_gemm, tok, host_gemm)
+            }
+        }
     } else {
         match prefill_mode {
             "gemv-loop" => {
                 let start = std::time::Instant::now();
                 let (logits, _) = prefill_loop(&mut cache)?;
-                (start.elapsed(), select_token(argmax, stream, &logits)?)
+                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                (start.elapsed(), select_token(argmax, stream, &logits)?, host)
             }
             "batched-gemv" => {
                 let (logits, dt) = prefill_batched(&mut cache, false)?;
-                (dt, select_token(argmax, stream, &logits)?)
+                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                (dt, select_token(argmax, stream, &logits)?, host)
             }
             _ => {
                 let (logits, dt) = prefill_batched(&mut cache, true)?;
-                (dt, select_token(argmax, stream, &logits)?)
+                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                (dt, select_token(argmax, stream, &logits)?, host)
             }
         }
     };
+
     let mut current_pos = host_tokens.len();
     let mut generated_tokens = Vec::with_capacity(max_tokens);
     let mut decode_steps = 0usize;
@@ -440,32 +499,165 @@ fn run_prompt<M: ModelBackend>(
         current_pos += 1;
         next_token = select_token(argmax, stream, &logits)?;
     }
-    let generation_time = generation_start.elapsed();
+    let decode_time = generation_start.elapsed();
 
-    let response = tokenizer
+    let text = tokenizer
         .decode(&generated_tokens, false)
         .map_err(|e| format!("Output decoding failed: {e}"))?;
-    println!("Generated output:\n{response}");
-    if response.trim().is_empty() {
-        println!("[No text was generated]");
+
+    println!("\n[{backend}] {label} -> generated output:\n{text}");
+    if text.trim().is_empty() {
+        println!("[{backend}] [No text was generated]");
     }
-    println!("--- End generated output ---");
-    let generated_count = generated_tokens.len();
-    let tokens_per_second = if generation_time.as_secs_f64() > 0.0 {
-        decode_steps as f64 / generation_time.as_secs_f64()
+    println!("[{backend}] --- End generated output ---");
+    let tps = if decode_time.as_secs_f64() > 0.0 {
+        decode_steps as f64 / decode_time.as_secs_f64()
     } else {
         0.0
     };
     println!(
-        "Timing: prefill {} tokens in {:.2?}; generated {} tokens with {} decode steps in {:.2?} ({:.2} decode tok/s)",
-        input_tokens.len(),
+        "[{backend}] Timing: prefill {} tokens in {:.2?}; generated {} tokens with {} decode steps in {:.2?} ({:.2} decode tok/s)",
+        host_tokens.len(),
         prefill_time,
-        generated_count,
+        generated_tokens.len(),
         decode_steps,
-        generation_time,
-        tokens_per_second
+        decode_time,
+        tps
     );
-    Ok(())
+
+    Ok(PromptOutcome {
+        name: backend.to_string(),
+        tokens: generated_tokens,
+        text,
+        decode_steps,
+        prefill_time,
+        decode_time,
+        prefill_logits,
+    })
+}
+
+fn max_abs_diff(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max)
+}
+
+/// "A 1.39x faster" phrasing for whichever of the two is quicker.
+fn speedup_phrase(
+    a_time: std::time::Duration,
+    b_time: std::time::Duration,
+    a_name: &str,
+    b_name: &str,
+) -> String {
+    let a = a_time.as_secs_f64();
+    let b = b_time.as_secs_f64();
+    if a <= 0.0 || b <= 0.0 {
+        return "n/a".to_string();
+    }
+    if a < b {
+        format!("{a_name} {:.2}x faster", b / a)
+    } else if b < a {
+        format!("{b_name} {:.2}x faster", a / b)
+    } else {
+        "tie".to_string()
+    }
+}
+
+/// Head-to-head summary over the outcomes produced for one prompt. Always
+/// prints a timing table; with more than one backend it also checks that the
+/// generated tokens match and reports the cross-backend logits diff.
+fn print_backend_comparison(outcomes: &[PromptOutcome]) {
+    if outcomes.len() < 2 {
+        return;
+    }
+    println!("\n=== Backend comparison ===");
+    println!(
+        "{:<8} {:>12} {:>12} {:>14} {:>9}",
+        "backend", "prefill", "decode", "decode tok/s", "gen tok"
+    );
+    for run in outcomes {
+        let tps = if run.decode_time.as_secs_f64() > 0.0 {
+            run.decode_steps as f64 / run.decode_time.as_secs_f64()
+        } else {
+            0.0
+        };
+        println!(
+            "{:<8} {:>12} {:>12} {:>14.2} {:>9}",
+            run.name,
+            format!("{:.2?}", run.prefill_time),
+            format!("{:.2?}", run.decode_time),
+            tps,
+            run.tokens.len()
+        );
+    }
+
+    let base = &outcomes[0];
+    for other in &outcomes[1..] {
+        println!("\n-- {} vs {} --", base.name, other.name);
+        if base.tokens == other.tokens {
+            println!(
+                "  generated tokens: IDENTICAL ({}/{})",
+                base.tokens.len(),
+                other.tokens.len()
+            );
+        } else {
+            let first = base
+                .tokens
+                .iter()
+                .zip(other.tokens.iter())
+                .position(|(a, b)| a != b);
+            let at = first
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "length difference".to_string());
+            println!(
+                "  generated tokens: DIVERGED at index {at} ({} vs {} tokens)",
+                base.tokens.len(),
+                other.tokens.len()
+            );
+        }
+        println!(
+            "  prefill last-token logits max abs diff: {:.3e}",
+            max_abs_diff(&base.prefill_logits, &other.prefill_logits)
+        );
+        println!(
+            "  decoded text: {}",
+            if base.text == other.text {
+                "identical".to_string()
+            } else {
+                "DIFFERENT".to_string()
+            }
+        );
+        println!(
+            "  prefill: {} {:.2?} | {} {:.2?}  ->  {}",
+            base.name,
+            base.prefill_time,
+            other.name,
+            other.prefill_time,
+            speedup_phrase(base.prefill_time, other.prefill_time, &base.name, &other.name)
+        );
+        println!(
+            "  decode:  {} {:.2?} | {} {:.2?}  ->  {}",
+            base.name,
+            base.decode_time,
+            other.name,
+            other.decode_time,
+            speedup_phrase(base.decode_time, other.decode_time, &base.name, &other.name)
+        );
+        println!(
+            "  end-to-end: {} {:.2?} | {} {:.2?}  ->  {}",
+            base.name,
+            base.prefill_time + base.decode_time,
+            other.name,
+            other.prefill_time + other.decode_time,
+            speedup_phrase(
+                base.prefill_time + base.decode_time,
+                other.prefill_time + other.decode_time,
+                &base.name,
+                &other.name
+            )
+        );
+    }
 }
 
 fn select_token(
