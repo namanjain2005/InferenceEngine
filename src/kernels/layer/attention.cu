@@ -67,6 +67,13 @@ extern "C" __global__ void attention_decode(
         __syncthreads();
     }
     const float max_val = reduction[0];
+    // All threads must read the row maximum before any thread overwrites
+    // `reduction[]` with its partial sum below. On Volta's independent thread
+    // scheduling a fast thread can store local_sum into reduction[0] before a
+    // slower thread has read it, so that thread sees a tiny `max_val`;
+    // expf(score - max_val) then overflows to +inf, the sum becomes inf,
+    // inv_sum becomes 0 and `inf * 0` turns the whole head into NaN.
+    __syncthreads();
 
     float local_sum = 0.0f;
     for (int t = tid; t < seq_len; t += blockDim.x) {
@@ -156,6 +163,13 @@ extern "C" __global__ void attention_prefill(
         __syncthreads();
     }
     const float max_val = reduction[0];
+    // All threads must read the row maximum before any thread overwrites
+    // `reduction[]` with its partial sum below. On Volta's independent thread
+    // scheduling a fast thread can store local_sum into reduction[0] before a
+    // slower thread has read it, so that thread sees a tiny `max_val`;
+    // expf(score - max_val) then overflows to +inf, the sum becomes inf,
+    // inv_sum becomes 0 and `inf * 0` turns the whole head into NaN.
+    __syncthreads();
 
     float local_sum = 0.0f;
     for (int t = tid; t < seq_len; t += blockDim.x) {
