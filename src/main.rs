@@ -205,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let tiny = vec![config.bos_token_id, config.bos_token_id];
         for &(name, linear) in &backends {
-            let mut cache = model.new_cache(&cuda_stream, 4)?;
+            let mut cache = model.new_cache(&cuda_stream)?;
             // Token loop warmup (last-logits form, same as the timed baseline).
             for (pos, &tok) in tiny.iter().enumerate() {
                 if pos + 1 < tiny.len() {
@@ -214,9 +214,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     model.forward_token(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
                 }
             }
-            let mut cache_b = model.new_cache(&cuda_stream, 4)?;
+            let mut cache_b = model.new_cache(&cuda_stream)?;
             let _ = model.forward_prefill(&tiny, 0, &mut cache_b, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
-            let mut cache_g = model.new_cache(&cuda_stream, 4)?;
+            let mut cache_g = model.new_cache(&cuda_stream)?;
             let _ = model.forward_prefill(&tiny, 0, &mut cache_g, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
             println!("   -> Warmup done for backend {name}.");
         }
@@ -368,11 +368,6 @@ fn run_backend<M: ModelBackend>(
     bench_repeat: usize,
 ) -> Result<PromptOutcome, String> {
     let config = model.config();
-    let max_seq_len = host_tokens
-        .len()
-        .checked_add(max_tokens)
-        .ok_or("Requested sequence length overflow")?;
-
     // Prefill helpers. The token-loop baseline projects logits for the last
     // token only (via forward_token_hidden for the rest), matching the work
     // the batched paths do.
@@ -402,28 +397,27 @@ fn run_backend<M: ModelBackend>(
         dts[dts.len() / 2]
     };
 
-    let mut cache = model.new_cache(stream, max_seq_len)?;
+    let mut cache;
     let (prefill_time, mut next_token, prefill_logits) = if bench_prefill {
         let reps = bench_repeat;
-        // Kept run per path: logits for the diff check + cache for decode.
-        let mut cache_loop = model.new_cache(stream, max_seq_len)?;
-        let mut cache_bgemv = model.new_cache(stream, max_seq_len)?;
-        let mut cache_gemm = model.new_cache(stream, max_seq_len)?;
+        // One cache per path, reused for the logits/diff run, the timed reps,
+        // and then decode. Prefill rewrites rows `[0, prompt)` in place, so no
+        // run needs a fresh allocation and no cache memory is churned.
+        let mut cache_loop = model.new_cache(stream)?;
+        let mut cache_bgemv = model.new_cache(stream)?;
+        let mut cache_gemm = model.new_cache(stream)?;
         let (logits_loop, _) = prefill_loop(&mut cache_loop)?;
         let (logits_bgemv, _) = prefill_batched(&mut cache_bgemv, false)?;
         let (logits_gemm, _) = prefill_batched(&mut cache_gemm, true)?;
-        // Timed medians with fresh caches (interleaved round-robin so a
-        // slow drift of machine state can't systematically favor one path).
+        // Timed medians on the same caches, interleaved round-robin so a slow
+        // drift of machine state can't systematically favor one path.
         let mut loop_dts = Vec::with_capacity(reps);
         let mut bgemv_dts = Vec::with_capacity(reps);
         let mut gemm_dts = Vec::with_capacity(reps);
         for _ in 0..reps {
-            let mut c = model.new_cache(stream, max_seq_len)?;
-            loop_dts.push(prefill_loop(&mut c)?.1);
-            let mut c = model.new_cache(stream, max_seq_len)?;
-            bgemv_dts.push(prefill_batched(&mut c, false)?.1);
-            let mut c = model.new_cache(stream, max_seq_len)?;
-            gemm_dts.push(prefill_batched(&mut c, true)?.1);
+            loop_dts.push(prefill_loop(&mut cache_loop)?.1);
+            bgemv_dts.push(prefill_batched(&mut cache_bgemv, false)?.1);
+            gemm_dts.push(prefill_batched(&mut cache_gemm, true)?.1);
         }
         let (dt_loop, dt_bgemv, dt_gemm) =
             (median_of(loop_dts), median_of(bgemv_dts), median_of(gemm_dts));
@@ -460,6 +454,7 @@ fn run_backend<M: ModelBackend>(
             }
         }
     } else {
+        cache = model.new_cache(stream)?;
         match prefill_mode {
             "gemv-loop" => {
                 let start = std::time::Instant::now();

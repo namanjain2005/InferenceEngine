@@ -5,6 +5,11 @@ use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
 use std::sync::Arc;
 
+/// Initial number of token positions a [`KVCache`] allocates. The cache grows
+/// geometrically on demand, so this only reserves memory for the common short
+/// prompt case and never imposes a hard sequence-length limit.
+pub const DEFAULT_KV_CACHE_CAPACITY: usize = 2048;
+
 pub struct LayerWeights {
     input_layernorm: CudaSlice<f32>,
     q_proj_weight: CudaSlice<f32>,
@@ -32,7 +37,7 @@ pub struct Qwen2Model {
 pub trait ModelBackend {
     type Cache;
     fn config(&self) -> &ModelConfig;
-    fn new_cache(&self, stream: &Arc<CudaStream>, capacity: usize) -> Result<Self::Cache, String>;
+    fn new_cache(&self, stream: &Arc<CudaStream>) -> Result<Self::Cache, String>;
     fn forward_token(
         &self,
         token_id: usize,
@@ -87,15 +92,32 @@ pub struct LayerKVCache {
 }
 pub struct KVCache {
     layers: Vec<LayerKVCache>,
+    capacity: usize,
+    kv_dim: usize,
 }
 
 impl KVCache {
+    /// Allocate a cache using [`DEFAULT_KV_CACHE_CAPACITY`] positions.
     pub fn new(
+        stream: &Arc<CudaStream>,
+        num_layers: usize,
+        kv_dim: usize,
+    ) -> Result<Self, String> {
+        Self::with_capacity(stream, num_layers, DEFAULT_KV_CACHE_CAPACITY, kv_dim)
+    }
+
+    /// Allocate a cache with an explicit initial number of token positions.
+    /// Each layer stores `capacity * kv_dim` key and value floats. The cache
+    /// still grows automatically if generation runs past this capacity.
+    pub fn with_capacity(
         stream: &Arc<CudaStream>,
         num_layers: usize,
         capacity: usize,
         kv_dim: usize,
     ) -> Result<Self, String> {
+        if num_layers == 0 || capacity == 0 || kv_dim == 0 {
+            return Err("KV cache layers, capacity, and dimension must be non-zero".into());
+        }
         let len = capacity
             .checked_mul(kv_dim)
             .ok_or("KV cache size overflow")?;
@@ -109,7 +131,78 @@ impl KVCache {
                 .map_err(|e| format!("Allocating GPU value cache failed: {e}"))?;
             layers.push(LayerKVCache { k, v });
         }
-        Ok(Self { layers })
+        Ok(Self {
+            layers,
+            capacity,
+            kv_dim,
+        })
+    }
+
+    /// Ensure at least `needed` token positions fit, growing the cache if
+    /// necessary. `preserve` is the number of rows already written and must
+    /// keep their contents. Growth is geometric (doubling) so decoding past
+    /// the initial capacity reallocates O(log n) times; only the live rows are
+    /// copied, and each old buffer is freed as soon as its replacement is in
+    /// place.
+    fn ensure_capacity(
+        &mut self,
+        stream: &Arc<CudaStream>,
+        needed: usize,
+        preserve: usize,
+    ) -> Result<(), String> {
+        if needed <= self.capacity {
+            return Ok(());
+        }
+        let old_capacity = self.capacity();
+        debug_assert!(
+            preserve <= old_capacity,
+            "cannot preserve {preserve} rows in a {old_capacity}-row cache"
+        );
+        let doubled = old_capacity
+            .checked_mul(2)
+            .ok_or("KV cache capacity overflow")?;
+        let new_capacity = needed.max(doubled);
+        let new_len = new_capacity
+            .checked_mul(self.kv_dim)
+            .ok_or("KV cache size overflow")?;
+        let copy_len = preserve
+            .min(old_capacity)
+            .checked_mul(self.kv_dim)
+            .ok_or("KV cache copy size overflow")?;
+
+        for layer in &mut self.layers {
+            let mut k = stream
+                .alloc_zeros::<f32>(new_len)
+                .map_err(|e| format!("Growing GPU key cache failed: {e}"))?;
+            let mut v = stream
+                .alloc_zeros::<f32>(new_len)
+                .map_err(|e| format!("Growing GPU value cache failed: {e}"))?;
+            if copy_len > 0 {
+                stream
+                    .memcpy_dtod(&layer.k.slice(..copy_len), &mut k.slice_mut(..copy_len))
+                    .map_err(|e| format!("Copying existing key cache failed: {e}"))?;
+                stream
+                    .memcpy_dtod(&layer.v.slice(..copy_len), &mut v.slice_mut(..copy_len))
+                    .map_err(|e| format!("Copying existing value cache failed: {e}"))?;
+            }
+            // Old buffers are dropped (freed) here; their contents are no
+            // longer referenced by subsequent kernels.
+            layer.k = k;
+            layer.v = v;
+        }
+        self.capacity = new_capacity;
+        Ok(())
+    }
+
+    /// Number of token positions this cache can currently hold. The value can
+    /// increase during generation as the cache grows.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Number of transformer layers backed by this cache.
+    pub fn num_layers(&self) -> usize {
+        self.layers.len()
     }
 }
 
@@ -184,6 +277,8 @@ impl Qwen2Model {
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String> {
+        let next_pos = pos.checked_add(1).ok_or("Token position overflow")?;
+        cache.ensure_capacity(stream, next_pos, pos)?;
         let hidden = self.config.hidden_size;
         let q_dim = self
             .config
@@ -310,13 +405,23 @@ impl ModelBackend for Qwen2Model {
         &self.config
     }
 
-    fn new_cache(&self, stream: &Arc<CudaStream>, capacity: usize) -> Result<Self::Cache, String> {
+    fn new_cache(&self, stream: &Arc<CudaStream>) -> Result<Self::Cache, String> {
         let kv_dim = self
             .config
             .num_key_value_heads
             .checked_mul(self.config.head_dim())
             .ok_or("KV dimension overflow")?;
-        KVCache::new(stream, self.config.num_hidden_layers, capacity, kv_dim)
+        // `KVCache::new` applies DEFAULT_KV_CACHE_CAPACITY; keep the cache
+        // layer count in lockstep with the resident model layers.
+        let cache = KVCache::new(stream, self.config.num_hidden_layers, kv_dim)?;
+        if cache.num_layers() != self.layers.len() {
+            return Err(format!(
+                "KV cache has {} layers but the model loaded {}",
+                cache.num_layers(),
+                self.layers.len()
+            ));
+        }
+        Ok(cache)
     }
 
     fn forward_token(
@@ -377,6 +482,12 @@ impl ModelBackend for Qwen2Model {
         if batch == 0 {
             return Err("Prefill token batch must not be empty".into());
         }
+        let end_pos = start_pos
+            .checked_add(batch)
+            .ok_or("Prefill sequence length overflow")?;
+        // Grow the cache before any kernel launch so appends and attention see
+        // one allocation for the whole prefill batch.
+        cache.ensure_capacity(stream, end_pos, start_pos)?;
         // Single trailing token: identical to the decode path, no batching win.
         if batch == 1 {
             return self.forward_token(tokens[0], start_pos, cache, linear, rmsnorm, swiglu, attention, vector, stream);
