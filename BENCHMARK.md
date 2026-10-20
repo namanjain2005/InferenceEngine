@@ -283,3 +283,9 @@ Qwen2.5-1.5B/3B/7B and FP16/INT8 on 14B are recorded in
 That section links the per-prompt CSV and captured run logs. These are
 single-pass end-to-end timings; the historical prefill comparison tables above
 remain the controlled median-of-three prefill benchmark.
+
+For a direct same-FP16 cross-model comparison across all nine prompts on
+1.5B/3B/7B/14B, see the
+[FP16 comparison section](HISTORY_BENCHMARK.md#same-precision-cross-model-comparison-fp16)
+and its filtered
+[`fp16_comparison.csv`](benchmark-results/precision-2026-10-20/fp16_comparison.csv).

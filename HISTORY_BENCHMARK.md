@@ -276,3 +276,60 @@ this machine, not a general speed ranking.
 | Qwen2.5-1.5B and 3B | Full nine-prompt suites completed in F32, FP16, and INT8 on custom/cuBLAS; per-prompt evidence is in the CSV and raw logs. |
 | Qwen2.5-7B | Full nine-prompt suites completed in F32, FP16, and INT8 on custom/cuBLAS. |
 | Qwen2.5-14B | Full nine-prompt suites completed in FP16 and INT8 on custom/cuBLAS. |
+
+
+## Same-precision cross-model comparison: FP16
+
+**Precision/configuration audit:** all four checkpoint logs report `--weight-format fp16`, use GPU 1, `--max-tokens 16`, `--linear both`, and run all nine prompts. The saved commands match exactly apart from the model directory. No rerun was needed to make precision parity consistent. GPU load was not controlled between these single-pass runs, so timing differences are observations rather than isolated scaling claims. The original raw logs and every prompt row are preserved in [`fp16_comparison.csv`](benchmark-results/precision-2026-10-20/fp16_comparison.csv).
+
+Reproduction for each model (replace the model directory):
+
+```bash
+cargo run --release -- --gpu 1 --model-dir models/Qwen2.5-1.5B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+```
+
+### Per-prompt custom/cuBLAS timings
+
+All times are milliseconds unless suffixed `s`. Each row reports custom prefill/decode, cuBLAS prefill/decode, generated-token agreement, and max absolute prefill-logit difference.
+
+| Model | Prompt | Input tokens | Custom prefill / decode | cuBLAS prefill / decode | Matching tokens | Max abs logit diff |
+|---|---|---:|---:|---:|---:|---:|
+| 1.5B | Tiny context | 33 | 106.00ms / 231.86ms | 13.93ms / 118.96ms | 13/13 | 9.012e-3 |
+| 1.5B | Short context | 45 | 107.96ms / 268.55ms | 13.55ms / 138.88ms | 16/16 | 8.146e-3 |
+| 1.5B | Medium context | 154 | 154.46ms / 273.94ms | 24.21ms / 145.47ms | 16/16 | 1.386e-2 |
+| 1.5B | Long context | 321 | 252.87ms / 282.47ms | 36.49ms / 151.59ms | 16/16 | 8.789e-3 |
+| 1.5B | Long context with repeated structure | 282 | 224.67ms / 280.40ms | 34.16ms / 150.35ms | 16/16 | 9.294e-3 |
+| 1.5B | Multi-step arithmetic | 56 | 108.67ms / 269.10ms | 14.10ms / 143.61ms | 16/16 | 7.067e-3 |
+| 1.5B | Compare totals | 73 | 118.49ms / 269.34ms | 17.35ms / 145.70ms | 16/16 | 1.175e-2 |
+| 1.5B | Exact format | 73 | 118.36ms / 269.42ms | 17.10ms / 162.49ms | 16/16 | 1.389e-2 |
+| 1.5B | Time extraction | 78 | 118.71ms / 270.80ms | 17.47ms / 146.88ms | 16/16 | 7.511e-3 |
+| 3B | Tiny context | 33 | 187.58ms / 335.33ms | 22.71ms / 159.66ms | 11/11 | 1.225e-2 |
+| 3B | Short context | 45 | 192.05ms / 458.29ms | 22.51ms / 217.65ms | 16/16 | 1.793e-2 |
+| 3B | Medium context | 154 | 254.89ms / 465.72ms | 39.88ms / 225.20ms | 16/16 | 1.170e-2 |
+| 3B | Long context | 321 | 486.10ms / 476.64ms | 58.14ms / 236.05ms | 16/16 | 9.747e-3 |
+| 3B | Long context with repeated structure | 282 | 409.35ms / 473.85ms | 55.68ms / 233.44ms | 16/16 | 1.373e-2 |
+| 3B | Multi-step arithmetic | 56 | 193.63ms / 459.10ms | 23.13ms / 219.29ms | 16/16 | 1.568e-2 |
+| 3B | Compare totals | 73 | 223.12ms / 460.20ms | 29.50ms / 220.19ms | 16/16 | 1.305e-2 |
+| 3B | Exact format | 73 | 223.80ms / 458.84ms | 29.35ms / 219.51ms | 16/16 | 3.186e-2 |
+| 3B | Time extraction | 78 | 223.16ms / 460.44ms | 29.65ms / 221.82ms | 16/16 | 1.268e-2 |
+| 7B | Tiny context | 33 | 310.06ms / 504.97ms | 38.13ms / 231.28ms | 9/9 | 1.005e-2 |
+| 7B | Short context | 45 | 325.46ms / 841.92ms | 39.32ms / 386.28ms | 16/16 | 9.233e-3 |
+| 7B | Medium context | 154 | 546.47ms / 848.64ms | 79.10ms / 390.81ms | 16/16 | 1.085e-2 |
+| 7B | Long context | 321 | 1.11s / 856.44ms | 105.63ms / 400.22ms | 16/16 | 8.895e-3 |
+| 7B | Long context with repeated structure | 282 | 969.26ms / 854.34ms | 100.64ms / 399.59ms | 16/16 | 8.425e-3 |
+| 7B | Multi-step arithmetic | 56 | 326.47ms / 843.24ms | 40.31ms / 386.98ms | 16/16 | 1.926e-2 |
+| 7B | Compare totals | 73 | 414.71ms / 843.97ms | 55.34ms / 388.13ms | 16/16 | 1.248e-2 |
+| 7B | Exact format | 73 | 414.90ms / 843.66ms | 59.39ms / 387.60ms | 16/16 | 1.847e-2 |
+| 7B | Time extraction | 78 | 415.52ms / 844.31ms | 55.89ms / 389.32ms | 16/16 | 1.138e-2 |
+| 14B | Tiny context | 33 | 528.77ms / 1.47s | 79.61ms / 634.09ms | 13/13 | 1.012e-2 |
+| 14B | Short context | 45 | 540.05ms / 1.70s | 83.48ms / 731.39ms | 16/16 | 2.271e-2 |
+| 14B | Medium context | 154 | 1.17s / 1.71s | 154.17ms / 741.26ms | 16/16 | 1.431e-2 |
+| 14B | Long context | 321 | 2.15s / 1.72s | 225.92ms / 754.32ms | 16/16 | 8.244e-3 |
+| 14B | Long context with repeated structure | 282 | 2.02s / 1.72s | 206.82ms / 751.57ms | 16/16 | 1.356e-2 |
+| 14B | Multi-step arithmetic | 56 | 544.91ms / 1.70s | 85.03ms / 733.29ms | 16/16 | 1.783e-2 |
+| 14B | Compare totals | 73 | 843.51ms / 1.70s | 122.30ms / 733.10ms | 16/16 | 1.493e-2 |
+| 14B | Exact format | 73 | 843.24ms / 1.70s | 120.38ms / 733.99ms | 16/16 | 1.452e-2 |
+| 14B | Time extraction | 78 | 847.20ms / 1.59s | 121.57ms / 685.84ms | 14/14 | 1.714e-2 |
+
+All 36 model/prompt comparisons had identical custom/cuBLAS token IDs and zero non-finite logits. The full `.log` files also contain the generated text for both backends.
