@@ -429,3 +429,63 @@ in the CSV.
 | Static request batches | 64 cases, 256 request records; every generated sequence matched its independent single-request reference. |
 | Batch size 5 and mixed short/long prompts | Passed on both backends for every available model. |
 | Batch size 8 | Passed on both backends for every available model, including 14B FP16. |
+
+## KV-cache strategy API (2026-10-20)
+
+Commit `5f5f98d` summary: extract cache state and policy from `model.rs` into
+`src/kv_cache.rs`. `KVCacheStrategy` creates per-request state implementing
+`KVCacheState`; the model calls logical capacity, append, prefill-attention,
+and decode-attention operations and does not depend on a cache's physical
+layout. `NaiveKVCacheStrategy` preserves the existing contiguous per-layer K/V
+buffers and geometric growth as the default. `KVCacheConfig` selects a
+strategy and initial capacity through the Rust API. `Qwen2Model::load` keeps
+the default behavior; callers can opt into another policy with
+`Qwen2Model::load_with_cache_config`. No CLI strategy selector was added.
+
+The interface allows future strategies to choose their own storage and
+attention implementation. Strategy-specific tuning belongs in the strategy
+value; the shared initial-capacity setting gives implementations an initial
+token or block budget. The first strategy remains the naive contiguous
+baseline, so these runs validate the extraction and default behavior, not a
+new cache optimization.
+
+### Reproduction and evidence
+
+The following command was run for each available checkpoint, changing only
+the model directory:
+
+```bash
+cargo run --release -- --gpu 1 --model-dir models/Qwen2.5-1.5B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16 \
+  --request-batch-sizes 1,2,5,8
+```
+
+Environment: GPU 1, Tesla V100-SXM2-32GB, CUDA 12.4, driver 550.144.03;
+FP16 projection weights, FP32 activations and accumulation. Each run executes
+all nine `BASE_PROMPTS.txt` prompts on custom and cuBLAS, then runs the static
+independent-request GPU batch suite at sizes 1, 2, 5, and 8. Batch groups
+include prompt-window and mixed short/long cases. Each request has its own
+cache, and all requests are present before generation begins.
+
+| Model | Standalone prompts | Custom/cuBLAS token agreement | Batch groups | Request records | Mismatches / non-finite logits | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Qwen2.5-1.5B | 9 | 9/9 | 16 | 64 | 0 / 0 | Passed |
+| Qwen2.5-3B | 9 | 9/9 | 16 | 64 | 0 / 0 | Passed |
+| Qwen2.5-7B | 9 | 9/9 | 16 | 64 | 0 / 0 | Passed |
+| Qwen2.5-14B | 9 | 9/9 | 16 | 64 | 0 / 0 | Passed; batch 8 completed |
+
+The batch records compare every batched output against a fresh single-request
+reference on the same backend. Each model log has 9 standalone prompt timing
+comparisons and all 64 request-level timing rows, including input length,
+prefill time, batch decode time, output length, and exact-match status. Logs:
+[`1.5B.log`](benchmark-results/kv-cache-strategy-2026-10-20/1.5B.log),
+[`3B.log`](benchmark-results/kv-cache-strategy-2026-10-20/3B.log),
+[`7B.log`](benchmark-results/kv-cache-strategy-2026-10-20/7B.log), and
+[`14B.log`](benchmark-results/kv-cache-strategy-2026-10-20/14B.log).
+
+`cargo test --all-targets` passed (2 library unit tests; binary and example
+targets passed), and `cargo check` passed. GPU timings are single-pass
+observations on the shared host and are retained as per-prompt evidence in the
+logs; they are not a performance comparison against a prior revision because
+the same strategy implementation and measurement conditions are not archived
+for that revision.

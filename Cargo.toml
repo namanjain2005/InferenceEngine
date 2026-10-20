@@ -3,6 +3,10 @@ name = "Engine"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "inference_engine"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 cudarc = { version = "0.19.10", features = ["cuda-12040", "cublas", "nvrtc"] }

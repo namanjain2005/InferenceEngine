@@ -1,15 +1,14 @@
 use crate::config::ModelConfig;
-use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use crate::kernels::LinearOp;
 use crate::kernels::LinearWeights;
+use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
+use crate::kv_cache::{KVCacheShape, KVCacheState};
 use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
 use std::sync::Arc;
 
-/// Initial number of token positions a [`KVCache`] allocates. The cache grows
-/// geometrically on demand, so this only reserves memory for the common short
-/// prompt case and never imposes a hard sequence-length limit.
-pub const DEFAULT_KV_CACHE_CAPACITY: usize = 2048;
+pub use crate::kv_cache::{DEFAULT_KV_CACHE_CAPACITY, KVCacheConfig};
+pub type KVCache = Box<dyn KVCacheState>;
 
 pub struct LayerWeights {
     input_layernorm: CudaSlice<f32>,
@@ -32,6 +31,7 @@ pub struct Qwen2Model {
     lm_head: Option<LinearWeights>,
     layers: Vec<LayerWeights>,
     norm: CudaSlice<f32>,
+    cache_config: KVCacheConfig,
 }
 
 /// Backend contract for causal decoder models. Each backend owns its cache
@@ -88,16 +88,6 @@ pub trait ModelBackend {
     ) -> Result<CudaSlice<f32>, String>;
 }
 
-pub struct LayerKVCache {
-    k: CudaSlice<f32>,
-    v: CudaSlice<f32>,
-}
-pub struct KVCache {
-    layers: Vec<LayerKVCache>,
-    capacity: usize,
-    kv_dim: usize,
-}
-
 fn load_layer_f32(
     st: &mut SafeTensors,
     linear: &dyn LinearOp,
@@ -122,124 +112,35 @@ fn load_layer_projection(
     linear.upload_weight(stream, &values, rows, cols, name)
 }
 
-impl KVCache {
-    /// Allocate a cache using [`DEFAULT_KV_CACHE_CAPACITY`] positions.
-    pub fn new(stream: &Arc<CudaStream>, num_layers: usize, kv_dim: usize) -> Result<Self, String> {
-        Self::with_capacity(stream, num_layers, DEFAULT_KV_CACHE_CAPACITY, kv_dim)
-    }
-
-    /// Allocate a cache with an explicit initial number of token positions.
-    /// Each layer stores `capacity * kv_dim` key and value floats. The cache
-    /// still grows automatically if generation runs past this capacity.
-    pub fn with_capacity(
-        stream: &Arc<CudaStream>,
-        num_layers: usize,
-        capacity: usize,
-        kv_dim: usize,
-    ) -> Result<Self, String> {
-        if num_layers == 0 || capacity == 0 || kv_dim == 0 {
-            return Err("KV cache layers, capacity, and dimension must be non-zero".into());
-        }
-        let len = capacity
-            .checked_mul(kv_dim)
-            .ok_or("KV cache size overflow")?;
-        let mut layers = Vec::with_capacity(num_layers);
-        for _ in 0..num_layers {
-            let k = stream
-                .alloc_zeros::<f32>(len)
-                .map_err(|e| format!("Allocating GPU key cache failed: {e}"))?;
-            let v = stream
-                .alloc_zeros::<f32>(len)
-                .map_err(|e| format!("Allocating GPU value cache failed: {e}"))?;
-            layers.push(LayerKVCache { k, v });
-        }
-        Ok(Self {
-            layers,
-            capacity,
-            kv_dim,
-        })
-    }
-
-    /// Ensure at least `needed` token positions fit, growing the cache if
-    /// necessary. `preserve` is the number of rows already written and must
-    /// keep their contents. Growth is geometric (doubling) so decoding past
-    /// the initial capacity reallocates O(log n) times; only the live rows are
-    /// copied, and each old buffer is freed as soon as its replacement is in
-    /// place.
-    fn ensure_capacity(
-        &mut self,
-        stream: &Arc<CudaStream>,
-        needed: usize,
-        preserve: usize,
-    ) -> Result<(), String> {
-        if needed <= self.capacity {
-            return Ok(());
-        }
-        let old_capacity = self.capacity();
-        debug_assert!(
-            preserve <= old_capacity,
-            "cannot preserve {preserve} rows in a {old_capacity}-row cache"
-        );
-        let doubled = old_capacity
-            .checked_mul(2)
-            .ok_or("KV cache capacity overflow")?;
-        let new_capacity = needed.max(doubled);
-        let new_len = new_capacity
-            .checked_mul(self.kv_dim)
-            .ok_or("KV cache size overflow")?;
-        let copy_len = preserve
-            .min(old_capacity)
-            .checked_mul(self.kv_dim)
-            .ok_or("KV cache copy size overflow")?;
-
-        for layer in &mut self.layers {
-            let mut k = stream
-                .alloc_zeros::<f32>(new_len)
-                .map_err(|e| format!("Growing GPU key cache failed: {e}"))?;
-            let mut v = stream
-                .alloc_zeros::<f32>(new_len)
-                .map_err(|e| format!("Growing GPU value cache failed: {e}"))?;
-            if copy_len > 0 {
-                stream
-                    .memcpy_dtod(&layer.k.slice(..copy_len), &mut k.slice_mut(..copy_len))
-                    .map_err(|e| format!("Copying existing key cache failed: {e}"))?;
-                stream
-                    .memcpy_dtod(&layer.v.slice(..copy_len), &mut v.slice_mut(..copy_len))
-                    .map_err(|e| format!("Copying existing value cache failed: {e}"))?;
-            }
-            // Old buffers are dropped (freed) here; their contents are no
-            // longer referenced by subsequent kernels.
-            layer.k = k;
-            layer.v = v;
-        }
-        self.capacity = new_capacity;
-        Ok(())
-    }
-
-    /// Number of token positions this cache can currently hold. The value can
-    /// increase during generation as the cache grows.
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Number of transformer layers backed by this cache.
-    pub fn num_layers(&self) -> usize {
-        self.layers.len()
-    }
-}
-
 impl Qwen2Model {
     pub fn new_cache_with_capacity(
         &self,
         stream: &Arc<CudaStream>,
         capacity: usize,
     ) -> Result<KVCache, String> {
-        KVCache::with_capacity(
-            stream,
-            self.config.num_hidden_layers,
-            capacity,
-            self.config.num_key_value_heads * self.config.head_dim(),
-        )
+        self.cache_config
+            .with_initial_capacity(capacity)?
+            .create_cache(stream, self.cache_shape()?)
+    }
+
+    pub fn cache_strategy_name(&self) -> &'static str {
+        self.cache_config.strategy_name()
+    }
+
+    fn create_cache(&self, stream: &Arc<CudaStream>) -> Result<KVCache, String> {
+        self.cache_config.create_cache(stream, self.cache_shape()?)
+    }
+
+    fn cache_shape(&self) -> Result<KVCacheShape, String> {
+        let kv_dim = self
+            .config
+            .num_key_value_heads
+            .checked_mul(self.config.head_dim())
+            .ok_or("KV dimension overflow")?;
+        Ok(KVCacheShape {
+            num_layers: self.config.num_hidden_layers,
+            kv_dim,
+        })
     }
 
     pub fn load(
@@ -247,6 +148,16 @@ impl Qwen2Model {
         config: ModelConfig,
         linear: &dyn LinearOp,
         stream: &Arc<CudaStream>,
+    ) -> Result<Self, String> {
+        Self::load_with_cache_config(st, config, linear, stream, KVCacheConfig::default())
+    }
+
+    pub fn load_with_cache_config(
+        st: &mut SafeTensors,
+        config: ModelConfig,
+        linear: &dyn LinearOp,
+        stream: &Arc<CudaStream>,
+        cache_config: KVCacheConfig,
     ) -> Result<Self, String> {
         println!("   Uploading embedding and final norm weights to GPU...");
         let embed_tokens = linear.upload(
@@ -364,6 +275,7 @@ impl Qwen2Model {
             lm_head,
             layers,
             norm,
+            cache_config,
         })
     }
 
@@ -435,25 +347,16 @@ impl Qwen2Model {
                 self.config.head_dim(),
                 self.config.rope_theta,
             )?;
-            let layer_cache = &mut cache.layers[l];
-            vector.append_cache(
-                stream,
-                &k,
-                &v,
-                &mut layer_cache.k,
-                &mut layer_cache.v,
-                pos,
-                kv_dim,
-            )?;
-            let attn_out = attention.forward(
-                stream,
+            cache.append_token(l, pos, &k, &v, vector, stream)?;
+            let attn_out = cache.attend_decode(
+                l,
                 &q,
-                &layer_cache.k,
-                &layer_cache.v,
                 pos + 1,
                 self.config.num_attention_heads,
                 self.config.num_key_value_heads,
                 self.config.head_dim(),
+                attention,
+                stream,
             )?;
             let attn_proj =
                 linear.gemv_weight(stream, &attn_out, &layer.o_proj_weight, None, q_dim, hidden)?;
@@ -584,25 +487,16 @@ impl Qwen2Model {
                 let k_row = vector.gather_row(stream, &k, row, batch, kv_dim)?;
                 let v_row = vector.gather_row(stream, &v, row, batch, kv_dim)?;
                 let cache = &mut caches[row];
-                let layer_cache = &mut cache.layers[layer_index];
-                vector.append_cache(
-                    stream,
-                    &k_row,
-                    &v_row,
-                    &mut layer_cache.k,
-                    &mut layer_cache.v,
-                    positions[row],
-                    kv_dim,
-                )?;
-                let attn = attention.forward(
-                    stream,
+                cache.append_token(layer_index, positions[row], &k_row, &v_row, vector, stream)?;
+                let attn = cache.attend_decode(
+                    layer_index,
                     &q_row,
-                    &layer_cache.k,
-                    &layer_cache.v,
                     positions[row] + 1,
                     self.config.num_attention_heads,
                     self.config.num_key_value_heads,
                     self.config.head_dim(),
+                    attention,
+                    stream,
                 )?;
                 stream
                     .memcpy_dtod(
@@ -699,14 +593,8 @@ impl ModelBackend for Qwen2Model {
     }
 
     fn new_cache(&self, stream: &Arc<CudaStream>) -> Result<Self::Cache, String> {
-        let kv_dim = self
-            .config
-            .num_key_value_heads
-            .checked_mul(self.config.head_dim())
-            .ok_or("KV dimension overflow")?;
-        // `KVCache::new` applies DEFAULT_KV_CACHE_CAPACITY; keep the cache
-        // layer count in lockstep with the resident model layers.
-        let cache = KVCache::new(stream, self.config.num_hidden_layers, kv_dim)?;
+        // Ensure the configured strategy creates state aligned with model layers.
+        let cache = self.create_cache(stream)?;
         if cache.num_layers() != self.layers.len() {
             return Err(format!(
                 "KV cache has {} layers but the model loaded {}",
@@ -875,27 +763,17 @@ impl ModelBackend for Qwen2Model {
                 self.config.head_dim(),
                 self.config.rope_theta,
             )?;
-            let layer_cache = &mut cache.layers[l];
-            vector.append_cache_batch(
-                stream,
-                &k,
-                &v,
-                &mut layer_cache.k,
-                &mut layer_cache.v,
-                start_pos,
-                batch,
-                kv_dim,
-            )?;
-            let attn_out = attention.forward_prefill(
-                stream,
+            cache.append_prompt(l, start_pos, batch, &k, &v, vector, stream)?;
+            let attn_out = cache.attend_prefill(
+                l,
                 &q,
-                &layer_cache.k,
-                &layer_cache.v,
                 start_pos,
                 batch,
                 self.config.num_attention_heads,
                 self.config.num_key_value_heads,
                 self.config.head_dim(),
+                attention,
+                stream,
             )?;
             let attn_proj = lin(stream, &attn_out, &layer.o_proj_weight, None, q_dim, hidden)?;
             x = vector.add(stream, &x, &attn_proj)?;

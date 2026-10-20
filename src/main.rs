@@ -1,19 +1,15 @@
-mod config;
-mod gpu;
-mod kernels;
-mod model;
-mod safetensors;
-
 use clap::Parser;
-use config::ModelConfig;
 use cudarc::driver::{CudaSlice, CudaStream};
-use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
-use kernels::cublas_linear::CublasLinear;
-use kernels::linear::LinearKernel;
-use kernels::ops::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
-use kernels::{LinearOp, WeightFormat};
-use model::{validate_qwen2_checkpoint, ModelBackend, Qwen2Model};
-use safetensors::SafeTensors;
+use inference_engine::config::ModelConfig;
+use inference_engine::gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
+use inference_engine::kernels::cublas_linear::CublasLinear;
+use inference_engine::kernels::linear::LinearKernel;
+use inference_engine::kernels::ops::{
+    ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels,
+};
+use inference_engine::kernels::{LinearOp, WeightFormat};
+use inference_engine::model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
+use inference_engine::safetensors::SafeTensors;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -458,8 +454,12 @@ fn run_request_batch_suite(
     max_tokens: usize,
     prefill_mode: &str,
 ) -> Result<(), String> {
-    println!("\n[static request batch suite] Requests arrive together; every prompt owns an independent KV cache.");
-    println!("Prefill uses the existing per-request GEMM path; decode projections/MLP/logits use a GPU request batch; attention launches against each request's own cache.");
+    println!(
+        "\n[static request batch suite] Requests arrive together; every prompt owns an independent KV cache."
+    );
+    println!(
+        "Prefill uses the existing per-request GEMM path; decode projections/MLP/logits use a GPU request batch; attention launches against each request's own cache."
+    );
     let mut encoded = Vec::with_capacity(prompts.len());
     for (label, prompt) in prompts {
         encoded.push((label.clone(), tokenize_prompt(tokenizer, prompt)?));
@@ -638,16 +638,37 @@ fn run_request_batch_suite(
                 } else {
                     0.0
                 };
-                println!("Batch prefill total (serial prompts): {prefill_total:.2} ms; batched decode: {decode_ms:.2} ms; aggregate decode throughput: {throughput:.2} output tok/s");
+                println!(
+                    "Batch prefill total (serial prompts): {prefill_total:.2} ms; batched decode: {decode_ms:.2} ms; aggregate decode throughput: {throughput:.2} output tok/s"
+                );
                 for row in 0..size {
                     let matches = generated[row] == references[row];
-                    println!("request={} input_tokens={} prefill_ms={:.2} output_tokens={} identical_to_single={} output={}",
-                        group[row].0, group[row].1.len(), prefill_ms[row], generated[row].len(), matches,
-                        tokenizer.decode(&generated[row], true).unwrap_or_else(|_| "<decode error>".to_string()));
-                    println!("REQUEST_BATCH_RESULT,model_hidden={},layers={},backend={},case={},batch={},request={},input_tokens={},prefill_ms={:.3},batch_decode_ms={:.3},batch_output_tok_s={:.3},output_tokens={},identical={}",
-                        model.config.hidden_size, model.config.num_hidden_layers, backend_name, case, size,
-                        group[row].0.replace(',', " "), group[row].1.len(), prefill_ms[row], decode_ms,
-                        throughput, generated[row].len(), matches);
+                    println!(
+                        "request={} input_tokens={} prefill_ms={:.2} output_tokens={} identical_to_single={} output={}",
+                        group[row].0,
+                        group[row].1.len(),
+                        prefill_ms[row],
+                        generated[row].len(),
+                        matches,
+                        tokenizer
+                            .decode(&generated[row], true)
+                            .unwrap_or_else(|_| "<decode error>".to_string())
+                    );
+                    println!(
+                        "REQUEST_BATCH_RESULT,model_hidden={},layers={},backend={},case={},batch={},request={},input_tokens={},prefill_ms={:.3},batch_decode_ms={:.3},batch_output_tok_s={:.3},output_tokens={},identical={}",
+                        model.config.hidden_size,
+                        model.config.num_hidden_layers,
+                        backend_name,
+                        case,
+                        size,
+                        group[row].0.replace(',', " "),
+                        group[row].1.len(),
+                        prefill_ms[row],
+                        decode_ms,
+                        throughput,
+                        generated[row].len(),
+                        matches
+                    );
                     if !matches {
                         return Err(format!(
                             "Static batch output mismatch for request '{}' at batch size {size}",

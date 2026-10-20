@@ -15,6 +15,39 @@ The forward pass keeps logits on the GPU. A CUDA reduction selects the next
 token, and only that token ID is copied to the host. Prompt prefill reduces
 only the final prompt position because earlier prompt tokens are already known.
 
+## KV-cache strategies
+
+Cache storage is selected through `KVCacheConfig` when loading a model. The
+default is `NaiveKVCacheStrategy`, which keeps contiguous K/V buffers per
+layer and grows them geometrically. Model code uses the `KVCacheState`
+interface for capacity, token/prompt appends, and decode/prefill attention;
+strategies can therefore own a different physical layout and attention path.
+
+The crate exposes these types through its Rust library API. To use the current
+baseline explicitly:
+
+```rust,ignore
+use inference_engine::kv_cache::{KVCacheConfig, NaiveKVCacheStrategy};
+use inference_engine::model::Qwen2Model;
+use std::sync::Arc;
+
+let cache_config = KVCacheConfig::new(Arc::new(NaiveKVCacheStrategy), 2048)?;
+let model = Qwen2Model::load_with_cache_config(
+    &mut tensors,
+    config,
+    linear,
+    &stream,
+    cache_config,
+)?;
+```
+
+New strategies implement `KVCacheStrategy` to create a state that implements
+`KVCacheState`. The interface does not require the current contiguous-buffer
+layout. Strategy-specific settings can live in the strategy value passed to
+`KVCacheConfig`; `initial_capacity` remains the common initial-reservation
+setting for the naive strategy and can be interpreted by other strategies as
+an initial token or block budget.
+
 ## Checkpoint validation
 
 Download the additional local checkpoints with:
