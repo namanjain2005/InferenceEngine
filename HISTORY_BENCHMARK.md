@@ -336,7 +336,8 @@ All 36 model/prompt comparisons had identical custom/cuBLAS token IDs and zero n
 
 ## Static independent-request GPU batches (2026-10-20)
 
-Implementation summary: add a static request-batch decode path and the
+Implementation commit: `09b2b4e` (`feat(inference): add static GPU request
+batching`). Summary: add a static request-batch decode path and the
 `--request-batch-sizes` CLI option. Each row is an independent prompt with its
 own `KVCache`; its position is tracked separately, so prompts with different
 lengths can decode in one request batch. The batch path runs projection GEMMs,
