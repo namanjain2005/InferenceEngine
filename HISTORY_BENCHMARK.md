@@ -333,3 +333,98 @@ All times are milliseconds unless suffixed `s`. Each row reports custom prefill/
 | 14B | Time extraction | 78 | 847.20ms / 1.59s | 121.57ms / 685.84ms | 14/14 | 1.714e-2 |
 
 All 36 model/prompt comparisons had identical custom/cuBLAS token IDs and zero non-finite logits. The full `.log` files also contain the generated text for both backends.
+
+## Static independent-request GPU batches (2026-10-20)
+
+Implementation summary: add a static request-batch decode path and the
+`--request-batch-sizes` CLI option. Each row is an independent prompt with its
+own `KVCache`; its position is tracked separately, so prompts with different
+lengths can decode in one request batch. The batch path runs projection GEMMs,
+RMSNorm, MLP projections/SwiGLU, final logits, and argmax over request rows.
+Custom and cuBLAS paths use the same batch protocol. Untied `lm_head` weights
+are also used for the batched logits projection.
+
+### Reproduction and measurement
+
+All four commands used the same configuration except for the checkpoint:
+
+```bash
+cargo run --release -- --gpu 1 --model-dir models/Qwen2.5-1.5B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16 \
+  --request-batch-sizes 1,2,5,8
+```
+
+Environment: GPU 1, Tesla V100-SXM2-32GB, CUDA 12.4 / driver 550.144.03;
+FP16 projection weights with FP32 activations and accumulation. The full
+`BASE_PROMPTS.txt` suite ran first on both backends for every model, followed
+by each static request batch. Batch sizes 1, 2, 5, and 8 each used a front and
+tail prompt window (size 1 uses the first and last prompt). The size-5 and
+size-8 windows contain short and long prompts. All requests are present before
+prefill starts; no requests arrive during generation.
+
+Prefill intentionally reuses the existing single-request prefill path and is
+reported per request. During decode, projection, normalization, MLP, logits,
+and argmax operate over the GPU request dimension. The current attention
+implementation launches its CUDA attention kernel once per request because
+each cache remains an independent allocation. The batch decode time includes
+all decode model work, batched argmax, host token-ID transfer, and a stream
+synchronization. Aggregate decode tok/s is total returned tokens divided by
+that decode duration; serial initial prefill is excluded.
+
+### Correctness and per-case evidence
+
+| Model | Layers / hidden | Standalone prompt suite | Static batch groups | Batched requests | Batch sizes | GPU memory result |
+|---|---:|---:|---:|---:|---|---|
+| Qwen2.5-1.5B | 28 / 1536 | 9/9 prompts, custom/cuBLAS tokens identical | 16/16 passed | 64/64 identical to single-request reference | 1, 2, 5, 8 | Completed |
+| Qwen2.5-3B | 36 / 2048 | 9/9 prompts, custom/cuBLAS tokens identical | 16/16 passed | 64/64 identical to single-request reference | 1, 2, 5, 8 | Completed |
+| Qwen2.5-7B | 28 / 3584 | 9/9 prompts, custom/cuBLAS tokens identical | 16/16 passed | 64/64 identical to single-request reference | 1, 2, 5, 8 | Completed |
+| Qwen2.5-14B | 48 / 5120 | 9/9 prompts, custom/cuBLAS tokens identical | 16/16 passed | 64/64 identical to single-request reference | 1, 2, 5, 8 | Batch 8 completed; no OOM |
+
+Each model ran 8 cases per backend: two prompt windows at each of four batch
+sizes. Every request's generated token IDs exactly matched a fresh single-
+request run on the same backend; the program exits with an error on a
+mismatch. Every standalone custom/cuBLAS prompt comparison was token-identical
+with zero non-finite logits. The prompt-level single-run timings are in
+[`full_prompt_results.csv`](benchmark-results/request-batching-2026-10-20/full_prompt_results.csv).
+The complete, machine-readable group timings and request-level timings are in
+[`batch_case_results.csv`](benchmark-results/request-batching-2026-10-20/batch_case_results.csv)
+and
+[`per_request_results.csv`](benchmark-results/request-batching-2026-10-20/per_request_results.csv).
+The four `.log` files alongside those CSVs retain command output, generated
+text, correctness checks, and all nine prompt timings for each model.
+
+### Decode batch throughput observations
+
+The table gives the two measured front/tail windows as a range. Values are
+aggregate returned output tokens per second; exact group timings and every
+prompt membership are in `batch_case_results.csv`.
+
+| Model | Backend | Batch 1 | Batch 2 | Batch 5 | Batch 8 |
+|---|---|---:|---:|---:|---:|
+| 1.5B | custom | 54.2–57.5 | 19.2–21.2 | 48.4–50.9 | 75.7–77.1 |
+| 1.5B | cuBLAS | 98.2–102.5 | 155.4–173.5 | 297.2–321.2 | 432.4–433.5 |
+| 3B | custom | 32.0–34.0 | 10.3–12.2 | 27.5–29.6 | 43.6–45.3 |
+| 3B | cuBLAS | 65.3–68.5 | 98.1–115.0 | 208.4–232.3 | 296.1–307.2 |
+| 7B | custom | 17.6–18.7 | 7.0–8.9 | 19.8–21.9 | 31.9–33.8 |
+| 7B | cuBLAS | 37.9–40.3 | 57.5–73.2 | 141.9–160.4 | 216.6–227.9 |
+| 14B | custom | 8.7 | 4.1–4.2 | 10.7–10.9 | 16.9–17.0 |
+| 14B | cuBLAS | 19.9–20.0 | 34.0–34.9 | 78.2–81.0 | 117.0–117.3 |
+
+These are single-pass observations on a shared host. The custom GEMM path is
+especially inefficient at small request counts, and attention remains
+request-by-request; the numbers show current behavior rather than an isolated
+kernel speedup. Larger request groups improve cuBLAS aggregate decode
+throughput on these cases. Initial prefill is serial, so end-to-end request
+batch latency includes the sum of per-prompt prefill times shown per request
+in the CSV.
+
+### Validation
+
+| Check | Result |
+|---|---|
+| `cargo test --all-targets` | Passed: 2 unit tests; binary and example targets passed with 0 tests. |
+| `cargo check` | Passed. |
+| Standalone prompt suite, 1.5B/3B/7B/14B | 9 prompts per model on both backends; custom/cuBLAS outputs identical, zero non-finite logits. |
+| Static request batches | 64 cases, 256 request records; every generated sequence matched its independent single-request reference. |
+| Batch size 5 and mixed short/long prompts | Passed on both backends for every available model. |
+| Batch size 8 | Passed on both backends for every available model, including 14B FP16. |

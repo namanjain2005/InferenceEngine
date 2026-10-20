@@ -1,0 +1,73 @@
+model,prompt,backend,input_tokens,prefill_ms,generated_tokens,decode_steps,decode_ms,custom_cublas_tokens_identical
+1.5B,1 - Tiny context,custom,33,111.400,13,13,232.020,True
+1.5B,1 - Tiny context,cublas,33,14.050,13,13,118.280,True
+1.5B,2 - Short context,custom,45,107.900,16,15,267.720,True
+1.5B,2 - Short context,cublas,45,13.510,16,15,136.740,True
+1.5B,3 - Medium context,custom,154,154.580,16,15,273.700,True
+1.5B,3 - Medium context,cublas,154,24.300,16,15,144.060,True
+1.5B,4 - Long context,custom,321,251.950,16,15,282.100,True
+1.5B,4 - Long context,cublas,321,36.050,16,15,151.960,True
+1.5B,5 - Long context with repeated structure,custom,282,224.710,16,15,279.470,True
+1.5B,5 - Long context with repeated structure,cublas,282,33.320,16,15,148.110,True
+1.5B,6 - Multi-step arithmetic,custom,56,108.720,16,15,268.330,True
+1.5B,6 - Multi-step arithmetic,cublas,56,13.890,16,15,157.360,True
+1.5B,7 - Compare totals,custom,73,118.410,16,15,269.500,True
+1.5B,7 - Compare totals,cublas,73,17.040,16,15,139.170,True
+1.5B,8 - Exact format,custom,73,118.380,16,15,269.610,True
+1.5B,8 - Exact format,cublas,73,16.840,16,15,152.420,True
+1.5B,9 - Time extraction,custom,78,118.700,16,15,269.510,True
+1.5B,9 - Time extraction,cublas,78,17.240,16,15,161.870,True
+14B,1 - Tiny context,custom,33,527.760,13,13,1470.000,True
+14B,1 - Tiny context,cublas,33,81.540,13,13,633.560,True
+14B,2 - Short context,custom,45,540.470,16,15,1700.000,True
+14B,2 - Short context,cublas,45,83.040,16,15,732.240,True
+14B,3 - Medium context,custom,154,1180.000,16,15,1710.000,True
+14B,3 - Medium context,cublas,154,154.960,16,15,741.420,True
+14B,4 - Long context,custom,321,2150.000,16,15,1720.000,True
+14B,4 - Long context,cublas,321,224.640,16,15,756.550,True
+14B,5 - Long context with repeated structure,custom,282,2020.000,16,15,1720.000,True
+14B,5 - Long context with repeated structure,cublas,282,207.000,16,15,752.680,True
+14B,6 - Multi-step arithmetic,custom,56,544.570,16,15,1700.000,True
+14B,6 - Multi-step arithmetic,cublas,56,84.960,16,15,733.570,True
+14B,7 - Compare totals,custom,73,842.980,16,15,1700.000,True
+14B,7 - Compare totals,cublas,73,120.580,16,15,734.630,True
+14B,8 - Exact format,custom,73,843.660,16,15,1700.000,True
+14B,8 - Exact format,cublas,73,120.330,16,15,734.240,True
+14B,9 - Time extraction,custom,78,845.140,14,14,1590.000,True
+14B,9 - Time extraction,cublas,78,122.550,14,14,686.070,True
+3B,1 - Tiny context,custom,33,187.930,11,11,335.920,True
+3B,1 - Tiny context,cublas,33,22.130,11,11,160.480,True
+3B,2 - Short context,custom,45,192.100,16,15,459.840,True
+3B,2 - Short context,cublas,45,22.650,16,15,219.770,True
+3B,3 - Medium context,custom,154,254.890,16,15,466.750,True
+3B,3 - Medium context,cublas,154,39.480,16,15,226.710,True
+3B,4 - Long context,custom,321,485.800,16,15,476.860,True
+3B,4 - Long context,cublas,321,58.860,16,15,237.560,True
+3B,5 - Long context with repeated structure,custom,282,409.270,16,15,474.860,True
+3B,5 - Long context with repeated structure,cublas,282,55.630,16,15,235.650,True
+3B,6 - Multi-step arithmetic,custom,56,193.940,16,15,461.270,True
+3B,6 - Multi-step arithmetic,cublas,56,23.140,16,15,220.590,True
+3B,7 - Compare totals,custom,73,222.370,16,15,461.990,True
+3B,7 - Compare totals,cublas,73,29.700,16,15,222.050,True
+3B,8 - Exact format,custom,73,222.960,16,15,460.930,True
+3B,8 - Exact format,cublas,73,29.530,16,15,221.710,True
+3B,9 - Time extraction,custom,78,223.720,16,15,461.630,True
+3B,9 - Time extraction,cublas,78,29.960,16,15,221.960,True
+7B,1 - Tiny context,custom,33,310.220,9,9,505.210,True
+7B,1 - Tiny context,cublas,33,38.120,9,9,231.600,True
+7B,2 - Short context,custom,45,323.550,16,15,842.050,True
+7B,2 - Short context,cublas,45,39.330,16,15,386.010,True
+7B,3 - Medium context,custom,154,543.020,16,15,847.160,True
+7B,3 - Medium context,cublas,154,78.060,16,15,390.620,True
+7B,4 - Long context,custom,321,1110.000,16,15,856.230,True
+7B,4 - Long context,cublas,321,105.940,16,15,399.520,True
+7B,5 - Long context with repeated structure,custom,282,961.370,16,15,854.460,True
+7B,5 - Long context with repeated structure,cublas,282,101.040,16,15,397.950,True
+7B,6 - Multi-step arithmetic,custom,56,327.270,16,15,843.130,True
+7B,6 - Multi-step arithmetic,cublas,56,40.420,16,15,386.310,True
+7B,7 - Compare totals,custom,73,415.540,16,15,843.350,True
+7B,7 - Compare totals,cublas,73,55.430,16,15,386.800,True
+7B,8 - Exact format,custom,73,414.970,16,15,843.800,True
+7B,8 - Exact format,cublas,73,55.340,16,15,387.290,True
+7B,9 - Time extraction,custom,78,415.540,16,15,844.070,True
+7B,9 - Time extraction,cublas,78,55.860,16,15,388.260,True

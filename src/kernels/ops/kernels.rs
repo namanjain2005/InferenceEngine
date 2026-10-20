@@ -191,14 +191,19 @@ pub struct AttentionKernel {
 pub struct ArgmaxKernel {
     _module: Arc<CudaModule>,
     function: CudaFunction,
+    batch_function: CudaFunction,
 }
 
 impl ArgmaxKernel {
     pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
         let (module, function) = load_kernel(context, ARGMAX_CUDA, "argmax_f32")?;
+        let batch_function = module
+            .load_function("argmax_batch_f32")
+            .map_err(|e| format!("Loading argmax_batch_f32 failed: {e}"))?;
         Ok(Self {
             _module: module,
             function,
+            batch_function,
         })
     }
 
@@ -227,6 +232,42 @@ impl ArgmaxKernel {
             })
         }
         .map_err(|e| format!("Launching argmax CUDA kernel failed: {e}"))?;
+        Ok(result)
+    }
+
+    pub fn forward_batch(
+        &self,
+        stream: &Arc<CudaStream>,
+        values: &CudaSlice<f32>,
+        rows: usize,
+        cols: usize,
+    ) -> Result<CudaSlice<i32>, String> {
+        if rows == 0
+            || cols == 0
+            || values.len() != rows.checked_mul(cols).ok_or("Argmax batch size overflow")?
+        {
+            return Err("Batched argmax shape mismatch".into());
+        }
+        let (r, c) = (
+            checked_i32(rows, "Argmax rows")?,
+            checked_i32(cols, "Argmax columns")?,
+        );
+        let mut result = stream
+            .alloc_zeros::<i32>(rows)
+            .map_err(|e| format!("Allocating batched argmax output failed: {e}"))?;
+        let mut launch = stream.launch_builder(&self.batch_function);
+        launch.arg(values);
+        launch.arg(&mut result);
+        launch.arg(&r);
+        launch.arg(&c);
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: (r as u32, 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .map_err(|e| format!("Launching batched argmax failed: {e}"))?;
         Ok(result)
     }
 }
@@ -418,6 +459,7 @@ pub struct VectorKernels {
     append_cache: CudaFunction,
     embed_batch: CudaFunction,
     rope_batch: CudaFunction,
+    rope_batch_positions: CudaFunction,
     append_cache_batch: CudaFunction,
     gather_row: CudaFunction,
 }
@@ -443,6 +485,9 @@ impl VectorKernels {
         let rope_batch = module
             .load_function("apply_rope_batch")
             .map_err(|e| format!("Loading apply_rope_batch failed: {e}"))?;
+        let rope_batch_positions = module
+            .load_function("apply_rope_batch_positions")
+            .map_err(|e| format!("Loading apply_rope_batch_positions failed: {e}"))?;
         let append_cache_batch = module
             .load_function("append_cache_batch")
             .map_err(|e| format!("Loading append_cache_batch failed: {e}"))?;
@@ -457,6 +502,7 @@ impl VectorKernels {
             append_cache,
             embed_batch,
             rope_batch,
+            rope_batch_positions,
             append_cache_batch,
             gather_row,
         })
@@ -721,6 +767,72 @@ impl VectorKernels {
             })
         }
         .map_err(|e| format!("Launching batched RoPE failed: {e}"))?;
+        Ok((q_out, k_out))
+    }
+
+    /// Batched RoPE where every request row has its own absolute token position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rope_batch_positions(
+        &self,
+        stream: &Arc<CudaStream>,
+        q: &CudaSlice<f32>,
+        k: &CudaSlice<f32>,
+        positions: &[usize],
+        q_heads: usize,
+        kv_heads: usize,
+        dim: usize,
+        theta: f32,
+    ) -> Result<(CudaSlice<f32>, CudaSlice<f32>), String> {
+        let batch = positions.len();
+        if dim % 2 != 0
+            || batch == 0
+            || q.len() != batch * q_heads * dim
+            || k.len() != batch * kv_heads * dim
+        {
+            return Err("Per-request batched RoPE tensor shape mismatch".into());
+        }
+        let pos_i32 = positions
+            .iter()
+            .map(|&p| checked_i32(p, "RoPE position"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let dev_positions = stream
+            .clone_htod(&pos_i32)
+            .map_err(|e| format!("Uploading RoPE positions failed: {e}"))?;
+        let mut q_out = stream
+            .alloc_zeros::<f32>(q.len())
+            .map_err(|e| format!("Allocating batched RoPE query failed: {e}"))?;
+        let mut k_out = stream
+            .alloc_zeros::<f32>(k.len())
+            .map_err(|e| format!("Allocating batched RoPE key failed: {e}"))?;
+        let (b, qh, kh, d) = (
+            checked_i32(batch, "RoPE batch")?,
+            checked_i32(q_heads, "query heads")?,
+            checked_i32(kv_heads, "KV heads")?,
+            checked_i32(dim, "head dimension")?,
+        );
+        let mut launch = stream.launch_builder(&self.rope_batch_positions);
+        launch.arg(q);
+        launch.arg(k);
+        launch.arg(&dev_positions);
+        launch.arg(&mut q_out);
+        launch.arg(&mut k_out);
+        launch.arg(&b);
+        launch.arg(&qh);
+        launch.arg(&kh);
+        launch.arg(&d);
+        launch.arg(&theta);
+        let width = (q_heads * dim).max(kv_heads * dim);
+        let total = batch.checked_mul(width).ok_or("RoPE batch size overflow")?;
+        let grid = u32::try_from(total.div_ceil(THREADS as usize))
+            .map_err(|_| "RoPE grid exceeds CUDA range")?;
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: (grid, 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .map_err(|e| format!("Launching per-request batched RoPE failed: {e}"))?;
         Ok((q_out, k_out))
     }
 

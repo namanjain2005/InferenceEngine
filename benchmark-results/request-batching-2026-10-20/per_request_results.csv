@@ -1,0 +1,257 @@
+model,model_hidden,layers,backend,case,batch,request,input_tokens,prefill_ms,batch_decode_ms,batch_output_tok_s,output_tokens,identical
+1.5B,1536,28,custom,single-request,1,1 - Tiny context,33,106.259,240.071,54.151,13,true
+1.5B,1536,28,cublas,single-request,1,1 - Tiny context,33,13.345,126.849,102.484,13,true
+1.5B,1536,28,custom,single-request,1,9 - Time extraction,78,119.181,278.498,57.451,16,true
+1.5B,1536,28,cublas,single-request,1,9 - Time extraction,78,17.350,162.911,98.213,16,true
+1.5B,1536,28,custom,prompt-window,2,1 - Tiny context,33,106.197,1507.658,19.235,13,true
+1.5B,1536,28,custom,prompt-window,2,2 - Short context,45,107.948,1507.658,19.235,16,true
+1.5B,1536,28,cublas,prompt-window,2,1 - Tiny context,33,14.477,186.577,155.432,13,true
+1.5B,1536,28,cublas,prompt-window,2,2 - Short context,45,13.349,186.577,155.432,16,true
+1.5B,1536,28,custom,prompt-window,2,8 - Exact format,73,119.336,1511.890,21.166,16,true
+1.5B,1536,28,custom,prompt-window,2,9 - Time extraction,78,118.679,1511.890,21.166,16,true
+1.5B,1536,28,cublas,prompt-window,2,8 - Exact format,73,17.393,184.476,173.464,16,true
+1.5B,1536,28,cublas,prompt-window,2,9 - Time extraction,78,17.148,184.476,173.464,16,true
+1.5B,1536,28,custom,mixed-short-long,5,1 - Tiny context,33,106.702,1592.325,48.357,13,true
+1.5B,1536,28,custom,mixed-short-long,5,2 - Short context,45,108.240,1592.325,48.357,16,true
+1.5B,1536,28,custom,mixed-short-long,5,3 - Medium context,154,155.021,1592.325,48.357,16,true
+1.5B,1536,28,custom,mixed-short-long,5,4 - Long context,321,251.706,1592.325,48.357,16,true
+1.5B,1536,28,custom,mixed-short-long,5,5 - Long context with repeated structure,282,225.675,1592.325,48.357,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,1 - Tiny context,33,14.157,259.094,297.190,13,true
+1.5B,1536,28,cublas,mixed-short-long,5,2 - Short context,45,13.442,259.094,297.190,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,3 - Medium context,154,23.948,259.094,297.190,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,4 - Long context,321,35.146,259.094,297.190,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,33.011,259.094,297.190,16,true
+1.5B,1536,28,custom,mixed-short-long,5,5 - Long context with repeated structure,282,224.738,1572.818,50.864,16,true
+1.5B,1536,28,custom,mixed-short-long,5,6 - Multi-step arithmetic,56,108.754,1572.818,50.864,16,true
+1.5B,1536,28,custom,mixed-short-long,5,7 - Compare totals,73,118.346,1572.818,50.864,16,true
+1.5B,1536,28,custom,mixed-short-long,5,8 - Exact format,73,118.352,1572.818,50.864,16,true
+1.5B,1536,28,custom,mixed-short-long,5,9 - Time extraction,78,118.700,1572.818,50.864,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,33.408,249.043,321.230,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,6 - Multi-step arithmetic,56,13.793,249.043,321.230,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,7 - Compare totals,73,16.718,249.043,321.230,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,8 - Exact format,73,16.725,249.043,321.230,16,true
+1.5B,1536,28,cublas,mixed-short-long,5,9 - Time extraction,78,16.947,249.043,321.230,16,true
+1.5B,1536,28,custom,mixed-short-long,8,1 - Tiny context,33,105.948,1652.125,75.660,13,true
+1.5B,1536,28,custom,mixed-short-long,8,2 - Short context,45,107.789,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,3 - Medium context,154,154.710,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,4 - Long context,321,251.559,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,5 - Long context with repeated structure,282,224.442,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,108.870,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,7 - Compare totals,73,118.643,1652.125,75.660,16,true
+1.5B,1536,28,custom,mixed-short-long,8,8 - Exact format,73,118.435,1652.125,75.660,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,1 - Tiny context,33,13.458,289.098,432.379,13,true
+1.5B,1536,28,cublas,mixed-short-long,8,2 - Short context,45,13.257,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,3 - Medium context,154,23.815,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,4 - Long context,321,36.112,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,32.962,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,13.806,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,7 - Compare totals,73,16.727,289.098,432.379,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,8 - Exact format,73,16.795,289.098,432.379,16,true
+1.5B,1536,28,custom,mixed-short-long,8,2 - Short context,45,107.851,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,3 - Medium context,154,154.278,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,4 - Long context,321,249.839,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,5 - Long context with repeated structure,282,224.054,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,109.246,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,7 - Compare totals,73,118.640,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,8 - Exact format,73,118.626,1659.114,77.150,16,true
+1.5B,1536,28,custom,mixed-short-long,8,9 - Time extraction,78,119.090,1659.114,77.150,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,2 - Short context,45,13.447,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,3 - Medium context,154,23.821,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,4 - Long context,321,35.202,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,33.212,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,13.754,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,7 - Compare totals,73,16.892,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,8 - Exact format,73,16.754,295.291,433.471,16,true
+1.5B,1536,28,cublas,mixed-short-long,8,9 - Time extraction,78,16.851,295.291,433.471,16,true
+14B,5120,48,custom,single-request,1,1 - Tiny context,33,529.410,1488.718,8.732,13,true
+14B,5120,48,cublas,single-request,1,1 - Tiny context,33,83.793,650.066,19.998,13,true
+14B,5120,48,custom,single-request,1,9 - Time extraction,78,847.727,1606.070,8.717,14,true
+14B,5120,48,cublas,single-request,1,9 - Time extraction,78,126.761,703.178,19.910,14,true
+14B,5120,48,custom,prompt-window,2,1 - Tiny context,33,531.047,7054.691,4.111,13,true
+14B,5120,48,custom,prompt-window,2,2 - Short context,45,540.507,7054.691,4.111,16,true
+14B,5120,48,cublas,prompt-window,2,1 - Tiny context,33,82.317,854.137,33.952,13,true
+14B,5120,48,cublas,prompt-window,2,2 - Short context,45,83.669,854.137,33.952,16,true
+14B,5120,48,custom,prompt-window,2,8 - Exact format,73,852.125,7060.488,4.249,16,true
+14B,5120,48,custom,prompt-window,2,9 - Time extraction,78,846.434,7060.488,4.249,14,true
+14B,5120,48,cublas,prompt-window,2,8 - Exact format,73,123.031,860.222,34.875,16,true
+14B,5120,48,cublas,prompt-window,2,9 - Time extraction,78,122.115,860.222,34.875,14,true
+14B,5120,48,custom,mixed-short-long,5,1 - Tiny context,33,534.932,7203.442,10.689,13,true
+14B,5120,48,custom,mixed-short-long,5,2 - Short context,45,540.350,7203.442,10.689,16,true
+14B,5120,48,custom,mixed-short-long,5,3 - Medium context,154,1175.406,7203.442,10.689,16,true
+14B,5120,48,custom,mixed-short-long,5,4 - Long context,321,2151.054,7203.442,10.689,16,true
+14B,5120,48,custom,mixed-short-long,5,5 - Long context with repeated structure,282,2024.059,7203.442,10.689,16,true
+14B,5120,48,cublas,mixed-short-long,5,1 - Tiny context,33,84.011,984.517,78.211,13,true
+14B,5120,48,cublas,mixed-short-long,5,2 - Short context,45,83.386,984.517,78.211,16,true
+14B,5120,48,cublas,mixed-short-long,5,3 - Medium context,154,152.375,984.517,78.211,16,true
+14B,5120,48,cublas,mixed-short-long,5,4 - Long context,321,223.939,984.517,78.211,16,true
+14B,5120,48,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,207.230,984.517,78.211,16,true
+14B,5120,48,custom,mixed-short-long,5,5 - Long context with repeated structure,282,2027.145,7181.861,10.861,16,true
+14B,5120,48,custom,mixed-short-long,5,6 - Multi-step arithmetic,56,545.071,7181.861,10.861,16,true
+14B,5120,48,custom,mixed-short-long,5,7 - Compare totals,73,844.684,7181.861,10.861,16,true
+14B,5120,48,custom,mixed-short-long,5,8 - Exact format,73,843.515,7181.861,10.861,16,true
+14B,5120,48,custom,mixed-short-long,5,9 - Time extraction,78,845.924,7181.861,10.861,14,true
+14B,5120,48,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,209.076,962.706,81.022,16,true
+14B,5120,48,cublas,mixed-short-long,5,6 - Multi-step arithmetic,56,85.974,962.706,81.022,16,true
+14B,5120,48,cublas,mixed-short-long,5,7 - Compare totals,73,119.530,962.706,81.022,16,true
+14B,5120,48,cublas,mixed-short-long,5,8 - Exact format,73,119.353,962.706,81.022,16,true
+14B,5120,48,cublas,mixed-short-long,5,9 - Time extraction,78,120.515,962.706,81.022,14,true
+14B,5120,48,custom,mixed-short-long,8,1 - Tiny context,33,526.831,7396.422,16.900,13,true
+14B,5120,48,custom,mixed-short-long,8,2 - Short context,45,538.449,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,3 - Medium context,154,1172.569,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,4 - Long context,321,2144.234,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,5 - Long context with repeated structure,282,2027.589,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,544.473,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,7 - Compare totals,73,842.680,7396.422,16.900,16,true
+14B,5120,48,custom,mixed-short-long,8,8 - Exact format,73,842.867,7396.422,16.900,16,true
+14B,5120,48,cublas,mixed-short-long,8,1 - Tiny context,33,80.755,1068.683,116.966,13,true
+14B,5120,48,cublas,mixed-short-long,8,2 - Short context,45,82.316,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,3 - Medium context,154,152.941,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,4 - Long context,321,224.477,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,207.816,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,84.656,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,7 - Compare totals,73,119.674,1068.683,116.966,16,true
+14B,5120,48,cublas,mixed-short-long,8,8 - Exact format,73,119.506,1068.683,116.966,16,true
+14B,5120,48,custom,mixed-short-long,8,2 - Short context,45,541.178,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,3 - Medium context,154,1171.824,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,4 - Long context,321,2145.193,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,5 - Long context with repeated structure,282,2017.063,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,543.449,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,7 - Compare totals,73,842.810,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,8 - Exact format,73,842.461,7402.349,17.022,16,true
+14B,5120,48,custom,mixed-short-long,8,9 - Time extraction,78,843.988,7402.349,17.022,14,true
+14B,5120,48,cublas,mixed-short-long,8,2 - Short context,45,84.040,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,3 - Medium context,154,153.838,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,4 - Long context,321,224.613,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,206.752,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,85.275,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,7 - Compare totals,73,119.464,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,8 - Exact format,73,119.477,1073.968,117.322,16,true
+14B,5120,48,cublas,mixed-short-long,8,9 - Time extraction,78,120.533,1073.968,117.322,14,true
+3B,2048,36,custom,single-request,1,1 - Tiny context,33,187.985,344.048,31.972,11,true
+3B,2048,36,cublas,single-request,1,1 - Tiny context,33,22.487,168.412,65.316,11,true
+3B,2048,36,custom,single-request,1,9 - Time extraction,78,224.385,470.452,34.010,16,true
+3B,2048,36,cublas,single-request,1,9 - Time extraction,78,30.813,233.660,68.476,16,true
+3B,2048,36,custom,prompt-window,2,1 - Tiny context,33,188.330,2615.585,10.323,11,true
+3B,2048,36,custom,prompt-window,2,2 - Short context,45,191.953,2615.585,10.323,16,true
+3B,2048,36,cublas,prompt-window,2,1 - Tiny context,33,23.721,275.236,98.098,11,true
+3B,2048,36,cublas,prompt-window,2,2 - Short context,45,22.242,275.236,98.098,16,true
+3B,2048,36,custom,prompt-window,2,8 - Exact format,73,223.592,2620.616,12.211,16,true
+3B,2048,36,custom,prompt-window,2,9 - Time extraction,78,223.642,2620.616,12.211,16,true
+3B,2048,36,cublas,prompt-window,2,8 - Exact format,73,30.777,278.186,115.031,16,true
+3B,2048,36,cublas,prompt-window,2,9 - Time extraction,78,34.528,278.186,115.031,16,true
+3B,2048,36,custom,mixed-short-long,5,1 - Tiny context,33,189.305,2727.490,27.498,11,true
+3B,2048,36,custom,mixed-short-long,5,2 - Short context,45,192.910,2727.490,27.498,16,true
+3B,2048,36,custom,mixed-short-long,5,3 - Medium context,154,255.361,2727.490,27.498,16,true
+3B,2048,36,custom,mixed-short-long,5,4 - Long context,321,487.104,2727.490,27.498,16,true
+3B,2048,36,custom,mixed-short-long,5,5 - Long context with repeated structure,282,410.107,2727.490,27.498,16,true
+3B,2048,36,cublas,mixed-short-long,5,1 - Tiny context,33,23.700,359.830,208.432,11,true
+3B,2048,36,cublas,mixed-short-long,5,2 - Short context,45,22.262,359.830,208.432,16,true
+3B,2048,36,cublas,mixed-short-long,5,3 - Medium context,154,38.927,359.830,208.432,16,true
+3B,2048,36,cublas,mixed-short-long,5,4 - Long context,321,57.685,359.830,208.432,16,true
+3B,2048,36,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,55.242,359.830,208.432,16,true
+3B,2048,36,custom,mixed-short-long,5,5 - Long context with repeated structure,282,408.996,2700.371,29.626,16,true
+3B,2048,36,custom,mixed-short-long,5,6 - Multi-step arithmetic,56,193.423,2700.371,29.626,16,true
+3B,2048,36,custom,mixed-short-long,5,7 - Compare totals,73,221.801,2700.371,29.626,16,true
+3B,2048,36,custom,mixed-short-long,5,8 - Exact format,73,222.996,2700.371,29.626,16,true
+3B,2048,36,custom,mixed-short-long,5,9 - Time extraction,78,222.610,2700.371,29.626,16,true
+3B,2048,36,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,55.645,344.340,232.328,16,true
+3B,2048,36,cublas,mixed-short-long,5,6 - Multi-step arithmetic,56,23.225,344.340,232.328,16,true
+3B,2048,36,cublas,mixed-short-long,5,7 - Compare totals,73,29.852,344.340,232.328,16,true
+3B,2048,36,cublas,mixed-short-long,5,8 - Exact format,73,29.529,344.340,232.328,16,true
+3B,2048,36,cublas,mixed-short-long,5,9 - Time extraction,78,29.554,344.340,232.328,16,true
+3B,2048,36,custom,mixed-short-long,8,1 - Tiny context,33,187.718,2824.215,43.552,11,true
+3B,2048,36,custom,mixed-short-long,8,2 - Short context,45,191.780,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,3 - Medium context,154,254.934,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,4 - Long context,321,485.125,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,5 - Long context with repeated structure,282,408.921,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,193.734,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,7 - Compare totals,73,222.751,2824.215,43.552,16,true
+3B,2048,36,custom,mixed-short-long,8,8 - Exact format,73,223.219,2824.215,43.552,16,true
+3B,2048,36,cublas,mixed-short-long,8,1 - Tiny context,33,22.076,415.343,296.141,11,true
+3B,2048,36,cublas,mixed-short-long,8,2 - Short context,45,22.184,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,3 - Medium context,154,38.395,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,4 - Long context,321,57.864,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,55.287,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,22.956,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,7 - Compare totals,73,29.943,415.343,296.141,16,true
+3B,2048,36,cublas,mixed-short-long,8,8 - Exact format,73,29.948,415.343,296.141,16,true
+3B,2048,36,custom,mixed-short-long,8,2 - Short context,45,191.926,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,3 - Medium context,154,254.486,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,4 - Long context,321,485.348,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,5 - Long context with repeated structure,282,410.339,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,193.197,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,7 - Compare totals,73,224.086,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,8 - Exact format,73,223.504,2827.937,45.263,16,true
+3B,2048,36,custom,mixed-short-long,8,9 - Time extraction,78,223.852,2827.937,45.263,16,true
+3B,2048,36,cublas,mixed-short-long,8,2 - Short context,45,22.271,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,3 - Medium context,154,38.309,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,4 - Long context,321,57.491,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,54.883,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,22.916,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,7 - Compare totals,73,29.365,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,8 - Exact format,73,29.532,416.633,307.225,16,true
+3B,2048,36,cublas,mixed-short-long,8,9 - Time extraction,78,29.750,416.633,307.225,16,true
+7B,3584,28,custom,single-request,1,1 - Tiny context,33,310.506,510.982,17.613,9,true
+7B,3584,28,cublas,single-request,1,1 - Tiny context,33,38.852,237.356,37.918,9,true
+7B,3584,28,custom,single-request,1,9 - Time extraction,78,416.808,853.626,18.744,16,true
+7B,3584,28,cublas,single-request,1,9 - Time extraction,78,56.755,397.212,40.281,16,true
+7B,3584,28,custom,prompt-window,2,1 - Tiny context,33,311.268,3581.839,6.980,9,true
+7B,3584,28,custom,prompt-window,2,2 - Short context,45,326.339,3581.839,6.980,16,true
+7B,3584,28,cublas,prompt-window,2,1 - Tiny context,33,38.985,435.025,57.468,9,true
+7B,3584,28,cublas,prompt-window,2,2 - Short context,45,39.690,435.025,57.468,16,true
+7B,3584,28,custom,prompt-window,2,8 - Exact format,73,415.393,3588.818,8.917,16,true
+7B,3584,28,custom,prompt-window,2,9 - Time extraction,78,415.501,3588.818,8.917,16,true
+7B,3584,28,cublas,prompt-window,2,8 - Exact format,73,57.356,437.220,73.190,16,true
+7B,3584,28,cublas,prompt-window,2,9 - Time extraction,78,56.278,437.220,73.190,16,true
+7B,3584,28,custom,mixed-short-long,5,1 - Tiny context,33,312.900,3678.138,19.847,9,true
+7B,3584,28,custom,mixed-short-long,5,2 - Short context,45,328.234,3678.138,19.847,16,true
+7B,3584,28,custom,mixed-short-long,5,3 - Medium context,154,543.141,3678.138,19.847,16,true
+7B,3584,28,custom,mixed-short-long,5,4 - Long context,321,1111.230,3678.138,19.847,16,true
+7B,3584,28,custom,mixed-short-long,5,5 - Long context with repeated structure,282,962.911,3678.138,19.847,16,true
+7B,3584,28,cublas,mixed-short-long,5,1 - Tiny context,33,39.096,514.326,141.933,9,true
+7B,3584,28,cublas,mixed-short-long,5,2 - Short context,45,39.388,514.326,141.933,16,true
+7B,3584,28,cublas,mixed-short-long,5,3 - Medium context,154,76.548,514.326,141.933,16,true
+7B,3584,28,cublas,mixed-short-long,5,4 - Long context,321,107.441,514.326,141.933,16,true
+7B,3584,28,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,100.009,514.326,141.933,16,true
+7B,3584,28,custom,mixed-short-long,5,5 - Long context with repeated structure,282,958.440,3653.896,21.894,16,true
+7B,3584,28,custom,mixed-short-long,5,6 - Multi-step arithmetic,56,327.215,3653.896,21.894,16,true
+7B,3584,28,custom,mixed-short-long,5,7 - Compare totals,73,414.163,3653.896,21.894,16,true
+7B,3584,28,custom,mixed-short-long,5,8 - Exact format,73,414.246,3653.896,21.894,16,true
+7B,3584,28,custom,mixed-short-long,5,9 - Time extraction,78,414.863,3653.896,21.894,16,true
+7B,3584,28,cublas,mixed-short-long,5,5 - Long context with repeated structure,282,99.860,498.734,160.406,16,true
+7B,3584,28,cublas,mixed-short-long,5,6 - Multi-step arithmetic,56,40.031,498.734,160.406,16,true
+7B,3584,28,cublas,mixed-short-long,5,7 - Compare totals,73,54.873,498.734,160.406,16,true
+7B,3584,28,cublas,mixed-short-long,5,8 - Exact format,73,54.883,498.734,160.406,16,true
+7B,3584,28,cublas,mixed-short-long,5,9 - Time extraction,78,55.378,498.734,160.406,16,true
+7B,3584,28,custom,mixed-short-long,8,1 - Tiny context,33,310.221,3792.698,31.903,9,true
+7B,3584,28,custom,mixed-short-long,8,2 - Short context,45,321.136,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,3 - Medium context,154,544.337,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,4 - Long context,321,1112.213,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,5 - Long context with repeated structure,282,962.393,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,328.157,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,7 - Compare totals,73,415.337,3792.698,31.903,16,true
+7B,3584,28,custom,mixed-short-long,8,8 - Exact format,73,415.603,3792.698,31.903,16,true
+7B,3584,28,cublas,mixed-short-long,8,1 - Tiny context,33,39.799,558.677,216.583,9,true
+7B,3584,28,cublas,mixed-short-long,8,2 - Short context,45,39.252,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,3 - Medium context,154,77.066,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,4 - Long context,321,105.091,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,100.036,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,39.943,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,7 - Compare totals,73,55.085,558.677,216.583,16,true
+7B,3584,28,cublas,mixed-short-long,8,8 - Exact format,73,55.233,558.677,216.583,16,true
+7B,3584,28,custom,mixed-short-long,8,2 - Short context,45,324.532,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,3 - Medium context,154,544.262,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,4 - Long context,321,1108.200,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,5 - Long context with repeated structure,282,959.283,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,6 - Multi-step arithmetic,56,325.509,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,7 - Compare totals,73,414.538,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,8 - Exact format,73,414.541,3784.493,33.822,16,true
+7B,3584,28,custom,mixed-short-long,8,9 - Time extraction,78,415.547,3784.493,33.822,16,true
+7B,3584,28,cublas,mixed-short-long,8,2 - Short context,45,39.378,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,3 - Medium context,154,77.047,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,4 - Long context,321,104.949,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,5 - Long context with repeated structure,282,99.619,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,6 - Multi-step arithmetic,56,39.910,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,7 - Compare totals,73,54.775,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,8 - Exact format,73,55.167,561.556,227.938,16,true
+7B,3584,28,cublas,mixed-short-long,8,9 - Time extraction,78,55.584,561.556,227.938,16,true

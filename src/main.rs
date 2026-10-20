@@ -12,7 +12,7 @@ use kernels::cublas_linear::CublasLinear;
 use kernels::linear::LinearKernel;
 use kernels::ops::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use kernels::{LinearOp, WeightFormat};
-use model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
+use model::{validate_qwen2_checkpoint, ModelBackend, Qwen2Model};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,6 +75,11 @@ struct Args {
     /// Resident projection weight format: f32, f16, or symmetric row-wise int8.
     #[arg(long, default_value = "f32")]
     weight_format: String,
+
+    /// Run static independent-request GPU decode batches using the base prompt suite.
+    /// Example: --request-batch-sizes 1,2,5,8
+    #[arg(long, value_delimiter = ',')]
+    request_batch_sizes: Vec<usize>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -381,6 +386,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_backend_comparison(&outcomes);
     }
 
+    if !args.request_batch_sizes.is_empty() {
+        run_request_batch_suite(
+            &prompts,
+            &args.request_batch_sizes,
+            &model,
+            &backends,
+            &tokenizer,
+            &argmax,
+            &rmsnorm,
+            &swiglu,
+            &attention,
+            &vector,
+            &cuda_stream,
+            args.max_tokens,
+            &prefill,
+        )?;
+    }
+
     println!("\n============================================================");
     println!(" Inference finished successfully on GPU {}!", selected_gpu);
     println!("============================================================");
@@ -417,6 +440,225 @@ fn base_prompts() -> Vec<(String, String)> {
     }
 
     prompts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_request_batch_suite(
+    prompts: &[(String, String)],
+    requested_sizes: &[usize],
+    model: &Qwen2Model,
+    backends: &[(&str, &dyn LinearOp)],
+    tokenizer: &Tokenizer,
+    argmax: &ArgmaxKernel,
+    rmsnorm: &RmsNormKernel,
+    swiglu: &SwiGluKernel,
+    attention: &AttentionKernel,
+    vector: &VectorKernels,
+    stream: &Arc<CudaStream>,
+    max_tokens: usize,
+    prefill_mode: &str,
+) -> Result<(), String> {
+    println!("\n[static request batch suite] Requests arrive together; every prompt owns an independent KV cache.");
+    println!("Prefill uses the existing per-request GEMM path; decode projections/MLP/logits use a GPU request batch; attention launches against each request's own cache.");
+    let mut encoded = Vec::with_capacity(prompts.len());
+    for (label, prompt) in prompts {
+        encoded.push((label.clone(), tokenize_prompt(tokenizer, prompt)?));
+    }
+    let mut reference_cache = std::collections::HashMap::<(String, String), Vec<u32>>::new();
+
+    for &size in requested_sizes {
+        if size == 0 {
+            return Err("Request batch sizes must be non-zero".into());
+        }
+        if size > encoded.len() {
+            println!(
+                "Skipping request batch size {size}: only {} prompts are available",
+                encoded.len()
+            );
+            continue;
+        }
+        let mut starts = vec![0];
+        if encoded.len() > size && encoded.len() - size != 0 {
+            starts.push(encoded.len() - size);
+        }
+        starts.sort_unstable();
+        starts.dedup();
+        for start_index in starts {
+            let group = &encoded[start_index..start_index + size];
+            let case = if size == 1 {
+                "single-request"
+            } else if group.iter().any(|(_, t)| t.len() >= 250)
+                && group.iter().any(|(_, t)| t.len() < 80)
+            {
+                "mixed-short-long"
+            } else {
+                "prompt-window"
+            };
+            for &(backend_name, linear) in backends {
+                println!(
+                    "\n--- GPU request batch: size={size}, case={case}, backend={backend_name} ---"
+                );
+                println!(
+                    "Requests: {}",
+                    group
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+                // Independent, single-request outputs are the correctness reference.
+                let mut references = Vec::with_capacity(size);
+                for (label, tokens) in group {
+                    let key = (backend_name.to_string(), label.clone());
+                    if !reference_cache.contains_key(&key) {
+                        let baseline = run_backend(
+                            backend_name,
+                            label,
+                            model,
+                            linear,
+                            tokenizer,
+                            argmax,
+                            rmsnorm,
+                            swiglu,
+                            attention,
+                            vector,
+                            stream,
+                            tokens,
+                            max_tokens,
+                            prefill_mode,
+                            false,
+                            1,
+                        )?;
+                        reference_cache.insert(key.clone(), baseline.tokens);
+                    }
+                    references.push(
+                        reference_cache
+                            .get(&key)
+                            .expect("reference inserted")
+                            .clone(),
+                    );
+                }
+
+                let mut caches = Vec::with_capacity(size);
+                let mut positions = Vec::with_capacity(size);
+                let mut next_tokens = Vec::with_capacity(size);
+                let mut prefill_ms = Vec::with_capacity(size);
+                for (_, prompt_tokens) in group {
+                    let capacity = prompt_tokens.len().saturating_add(max_tokens).max(1);
+                    let mut cache = model.new_cache_with_capacity(stream, capacity)?;
+                    let begin = std::time::Instant::now();
+                    let logits = model.forward_prefill(
+                        prompt_tokens,
+                        0,
+                        &mut cache,
+                        linear,
+                        rmsnorm,
+                        swiglu,
+                        attention,
+                        vector,
+                        stream,
+                        prefill_mode == "gemm",
+                    )?;
+                    stream
+                        .synchronize()
+                        .map_err(|e| format!("Batch prefill synchronization failed: {e}"))?;
+                    prefill_ms.push(begin.elapsed().as_secs_f64() * 1000.0);
+                    next_tokens.push(select_token(argmax, stream, &logits)?);
+                    positions.push(prompt_tokens.len());
+                    caches.push(cache);
+                }
+
+                let mut generated = vec![Vec::<u32>::with_capacity(max_tokens); size];
+                let mut finished = vec![false; size];
+                let mut decode_ms = 0.0f64;
+                for generated_index in 0..max_tokens {
+                    for row in 0..size {
+                        let token = next_tokens[row];
+                        if !finished[row] {
+                            if token == model.config.eos_token_id
+                                || token == 151645
+                                || token == 151643
+                            {
+                                finished[row] = true;
+                            } else {
+                                generated[row].push(token as u32);
+                            }
+                        }
+                    }
+                    if generated_index + 1 == max_tokens || finished.iter().all(|&f| f) {
+                        break;
+                    }
+                    // Finished rows remain in the fixed GPU batch with a harmless BOS token;
+                    // their outputs are ignored while active rows continue together.
+                    let batch_tokens: Vec<usize> = next_tokens
+                        .iter()
+                        .enumerate()
+                        .map(|(row, &token)| {
+                            if finished[row] {
+                                model.config.bos_token_id
+                            } else {
+                                token
+                            }
+                        })
+                        .collect();
+                    let begin = std::time::Instant::now();
+                    let logits = model.forward_decode_batch(
+                        &batch_tokens,
+                        &positions,
+                        &mut caches,
+                        linear,
+                        rmsnorm,
+                        swiglu,
+                        attention,
+                        vector,
+                        stream,
+                    )?;
+                    let batch_argmax =
+                        argmax.forward_batch(stream, &logits, size, model.config.vocab_size)?;
+                    next_tokens = stream
+                        .clone_dtoh(&batch_argmax)
+                        .map_err(|e| format!("Copying batched token IDs failed: {e}"))?
+                        .into_iter()
+                        .map(|t| {
+                            usize::try_from(t).map_err(|_| format!("Invalid batched token ID {t}"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    stream
+                        .synchronize()
+                        .map_err(|e| format!("Batched decode synchronization failed: {e}"))?;
+                    decode_ms += begin.elapsed().as_secs_f64() * 1000.0;
+                    for pos in &mut positions {
+                        *pos += 1;
+                    }
+                }
+                let prefill_total: f64 = prefill_ms.iter().sum();
+                let output_tokens: usize = generated.iter().map(Vec::len).sum();
+                let throughput = if decode_ms > 0.0 {
+                    output_tokens as f64 * 1000.0 / decode_ms
+                } else {
+                    0.0
+                };
+                println!("Batch prefill total (serial prompts): {prefill_total:.2} ms; batched decode: {decode_ms:.2} ms; aggregate decode throughput: {throughput:.2} output tok/s");
+                for row in 0..size {
+                    let matches = generated[row] == references[row];
+                    println!("request={} input_tokens={} prefill_ms={:.2} output_tokens={} identical_to_single={} output={}",
+                        group[row].0, group[row].1.len(), prefill_ms[row], generated[row].len(), matches,
+                        tokenizer.decode(&generated[row], true).unwrap_or_else(|_| "<decode error>".to_string()));
+                    println!("REQUEST_BATCH_RESULT,model_hidden={},layers={},backend={},case={},batch={},request={},input_tokens={},prefill_ms={:.3},batch_decode_ms={:.3},batch_output_tok_s={:.3},output_tokens={},identical={}",
+                        model.config.hidden_size, model.config.num_hidden_layers, backend_name, case, size,
+                        group[row].0.replace(',', " "), group[row].1.len(), prefill_ms[row], decode_ms,
+                        throughput, generated[row].len(), matches);
+                    if !matches {
+                        return Err(format!(
+                            "Static batch output mismatch for request '{}' at batch size {size}",
+                            group[row].0
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One backend's full prefill + decode result for a single prompt. Lives in

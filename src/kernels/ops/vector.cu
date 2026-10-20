@@ -92,6 +92,43 @@ extern "C" __global__ void apply_rope_batch(
     }
 }
 
+// Multi-request decode: each batch row can have a different absolute position.
+extern "C" __global__ void apply_rope_batch_positions(
+    const float* q, const float* k, const int* positions,
+    float* q_out, float* k_out,
+    int batch, int q_heads, int kv_heads, int dim, float theta) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int half = dim / 2;
+    int q_n = q_heads * dim;
+    int kv_n = kv_heads * dim;
+    int width = q_n > kv_n ? q_n : kv_n;
+    int total = batch * width;
+    if (idx >= total) return;
+    int row = idx / width;
+    int col = idx % width;
+    int pos = positions[row];
+    if (col < q_n) {
+        int h = col / dim, d = col % dim;
+        int pair = d < half ? d : d - half;
+        float angle = (float)pos * powf(theta, -(2.0f * pair) / (float)dim);
+        float c = cosf(angle), s = sinf(angle);
+        int other = h * dim + (d < half ? d + half : d - half);
+        int base = row * q_n;
+        q_out[base + col] = d < half ? q[base + col] * c - q[base + other] * s
+                                     : q[base + col] * c + q[base + other] * s;
+    }
+    if (col < kv_n) {
+        int h = col / dim, d = col % dim;
+        int pair = d < half ? d : d - half;
+        float angle = (float)pos * powf(theta, -(2.0f * pair) / (float)dim);
+        float c = cosf(angle), s = sinf(angle);
+        int other = h * dim + (d < half ? d + half : d - half);
+        int base = row * kv_n;
+        k_out[base + col] = d < half ? k[base + col] * c - k[base + other] * s
+                                     : k[base + col] * c + k[base + other] * s;
+    }
+}
+
 extern "C" __global__ void append_cache_batch(
     const float* k, const float* v, float* k_cache, float* v_cache,
     int start_pos, int batch, int kv_dim) {

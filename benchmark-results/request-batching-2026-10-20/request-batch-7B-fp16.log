@@ -1,0 +1,673 @@
+warning: field `util_pct` is never read
+  --> src/gpu.rs:12:9
+   |
+ 6 | pub struct GpuDevice {
+   |            --------- field in this struct
+...
+12 |     pub util_pct: usize,
+   |         ^^^^^^^^
+   |
+   = note: `GpuDevice` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `new` is never used
+  --> src/kernels/cublas_linear.rs:32:12
+   |
+31 | impl CublasLinear {
+   | ----------------- associated function in this implementation
+32 |     pub fn new(context: &Arc<CudaContext>, stream: Arc<CudaStream>) -> Result<Self, String> {
+   |            ^^^
+
+warning: associated function `new` is never used
+  --> src/kernels/linear.rs:22:12
+   |
+21 | impl LinearKernel {
+   | ----------------- associated function in this implementation
+22 |     pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
+   |            ^^^
+
+warning: methods `tensor_names` and `read_embedding_row` are never used
+   --> src/safetensors.rs:120:12
+    |
+ 26 | impl SafeTensors {
+    | ---------------- methods in this implementation
+...
+120 |     pub fn tensor_names(&self) -> Vec<String> {
+    |            ^^^^^^^^^^^^
+...
+200 |     pub fn read_embedding_row(
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: `Engine` (bin "Engine") generated 4 warnings
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running `target/release/Engine --gpu 1 --model-dir models/Qwen2.5-7B-Instruct --max-tokens 16 --linear both --weight-format fp16 --request-batch-sizes 1,2,5,8`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 1.
+[2/5] Initializing CUDA Context on GPU 1...
+Initializing CUDA Context on GPU 1...
+CUDA Context and default stream ready on GPU 1.
+   -> Linear backend(s): custom, cublas
+   -> Projection weight format: F16 (FP32 activations and accumulation)
+   -> GPU 1 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-7B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 28 layers, hidden=3584, intermediate=18944, 28 q_heads, 4 kv_heads (GQA)
+   -> Safetensors opened: 339 tensors in header.
+   -> Validated 7615616512 parameters (14.19 GiB source weights; 15.20 GiB estimated resident weights as F16).
+   Uploading embedding and final norm weights to GPU...
+   Loading and uploading layer weights: 1/28   Loading and uploading layer weights: 2/28   Loading and uploading layer weights: 3/28   Loading and uploading layer weights: 4/28   Loading and uploading layer weights: 5/28   Loading and uploading layer weights: 6/28   Loading and uploading layer weights: 7/28   Loading and uploading layer weights: 8/28   Loading and uploading layer weights: 9/28   Loading and uploading layer weights: 10/28   Loading and uploading layer weights: 11/28   Loading and uploading layer weights: 12/28   Loading and uploading layer weights: 13/28   Loading and uploading layer weights: 14/28   Loading and uploading layer weights: 15/28   Loading and uploading layer weights: 16/28   Loading and uploading layer weights: 17/28   Loading and uploading layer weights: 18/28   Loading and uploading layer weights: 19/28   Loading and uploading layer weights: 20/28   Loading and uploading layer weights: 21/28   Loading and uploading layer weights: 22/28   Loading and uploading layer weights: 23/28   Loading and uploading layer weights: 24/28   Loading and uploading layer weights: 25/28   Loading and uploading layer weights: 26/28   Loading and uploading layer weights: 27/28   Loading and uploading layer weights: 28/28
+   All model weights are resident on the GPU.
+   -> Model loaded in 84.73s
+   -> Warmup done for backend custom.
+   -> Warmup done for backend cublas.
+
+[5/5] Running 9 prompt(s)...
+
+--- Prompt 1/9: 1 - Tiny context ---
+Input prompt:
+What is 7 + 5? Answer in one complete sentence.
+Input tokens: 33 (identical input fed to every backend)
+
+[custom] 1 - Tiny context -> generated output:
+7 + 5 is 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 310.22ms; generated 9 tokens with 9 decode steps in 505.21ms (17.81 decode tok/s)
+
+[cublas] 1 - Tiny context -> generated output:
+7 + 5 is 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 38.12ms; generated 9 tokens with 9 decode steps in 231.60ms (38.86 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       310.22ms     505.21ms          17.81         9
+cublas        38.12ms     231.60ms          38.86         9
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (9/9)
+  prefill last-token logits: max abs diff (finite) 1.005e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 310.22ms | cublas 38.12ms  ->  cublas 8.14x faster
+  decode:  custom 505.21ms | cublas 231.60ms  ->  cublas 2.18x faster
+  end-to-end: custom 815.42ms | cublas 269.73ms  ->  cublas 3.02x faster
+
+--- Prompt 2/9: 2 - Short context ---
+Input prompt:
+Changing one kernel detail at a time can make a performance experiment easier to
+understand. Why? Answer in one complete sentence.
+Input tokens: 45 (identical input fed to every backend)
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time allows for isolating the impact of each modification
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 323.55ms; generated 16 tokens with 15 decode steps in 842.05ms (17.81 decode tok/s)
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time allows for isolating the impact of each modification
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 39.33ms; generated 16 tokens with 15 decode steps in 386.01ms (38.86 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       323.55ms     842.05ms          17.81        16
+cublas        39.33ms     386.01ms          38.86        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 9.233e-3 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 323.55ms | cublas 39.33ms  ->  cublas 8.23x faster
+  decode:  custom 842.05ms | cublas 386.01ms  ->  cublas 2.18x faster
+  end-to-end: custom 1.17s | cublas 425.34ms  ->  cublas 2.74x faster
+
+--- Prompt 3/9: 3 - Medium context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+Reliable software is built by checking each layer of a system independently.
+Input data is validated before it reaches a computation. The computation should
+preserve its mathematical meaning while making good use of the hardware. Results
+are then checked against a simple reference. Performance measurements should
+record the input size, output size, device, and settings so that later runs can
+be compared fairly. A useful experiment changes one implementation detail at a
+time and keeps the workload fixed. This makes it easier to identify which change
+caused an improvement or regression.
+
+Summarize the main idea of the passage in two short sentences.
+Input tokens: 154 (identical input fed to every backend)
+
+[custom] 3 - Medium context -> generated output:
+Reliable software is built by independently checking each layer of a system, and useful
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 543.02ms; generated 16 tokens with 15 decode steps in 847.16ms (17.71 decode tok/s)
+
+[cublas] 3 - Medium context -> generated output:
+Reliable software is built by independently checking each layer of a system, and useful
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 78.06ms; generated 16 tokens with 15 decode steps in 390.62ms (38.40 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       543.02ms     847.16ms          17.71        16
+cublas        78.06ms     390.62ms          38.40        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.085e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 543.02ms | cublas 78.06ms  ->  cublas 6.96x faster
+  decode:  custom 847.16ms | cublas 390.62ms  ->  cublas 2.17x faster
+  end-to-end: custom 1.39s | cublas 468.68ms  ->  cublas 2.97x faster
+
+--- Prompt 4/9: 4 - Long context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+A small inference engine moves data through several stages. It begins by
+converting text into token identifiers. The model maps those identifiers into
+vectors, applies normalization, and computes query, key, and value projections.
+Rotary position information is added to the query and key vectors. Keys and
+values from earlier positions are kept in a cache so that each generated token
+can attend to the existing context without recomputing every projection.
+
+For one query head, attention compares the query with the keys at every cached
+position. Each score is scaled, normalized with softmax, and used to form a
+weighted sum of the values. In multi-head attention, each query head has its own
+key and value head. In grouped-query attention, several query heads share a key
+and value head. The same computation can handle either arrangement when the
+query-head and KV-head counts are provided correctly.
+
+GPU performance depends on how threads access memory as well as how many
+operations they perform. Neighboring lanes are most effective when they read
+neighboring values. A warp can cooperate on a dot product by loading adjacent
+head dimensions and reducing the partial sums. Softmax also needs reductions to
+find the maximum score and the sum of exponentials. Measuring one optimization
+at a time helps show whether coalesced reads or parallel reductions improve the
+actual workload.
+
+Based on the passage, explain grouped-query attention in two short sentences.
+Input tokens: 321 (identical input fed to every backend)
+
+[custom] 4 - Long context -> generated output:
+Grouped-query attention allows multiple query heads to share a key and value head.
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 1.11s; generated 16 tokens with 15 decode steps in 856.23ms (17.52 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+Grouped-query attention allows multiple query heads to share a key and value head.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 105.94ms; generated 16 tokens with 15 decode steps in 399.52ms (37.54 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          1.11s     856.23ms          17.52        16
+cublas       105.94ms     399.52ms          37.54        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 8.895e-3 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 1.11s | cublas 105.94ms  ->  cublas 10.49x faster
+  decode:  custom 856.23ms | cublas 399.52ms  ->  cublas 2.14x faster
+  end-to-end: custom 1.97s | cublas 505.46ms  ->  cublas 3.89x faster
+
+--- Prompt 5/9: 5 - Long context with repeated structure ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+The first record has a name, a category, and a numeric value. The second record
+has a name, a category, and a numeric value. The third record has a name, a
+category, and a numeric value. The fourth record has a name, a category, and a
+numeric value. The fifth record has a name, a category, and a numeric value.
+The sixth record has a name, a category, and a numeric value. The seventh record
+has a name, a category, and a numeric value. The eighth record has a name, a
+category, and a numeric value. The ninth record has a name, a category, and a
+numeric value. The tenth record has a name, a category, and a numeric value.
+
+When processing a long sequence, the key and value cache grows with the number
+of positions. Every new query must compare against the cached keys and combine
+the cached values. Changing the thread layout can improve memory transactions,
+but the result should still match the same attention calculation. Context size
+is therefore an important workload dimension when comparing kernel versions.
+
+According to the passage, what does the key-value cache save the model from
+recomputing? Answer in one complete sentence.
+Input tokens: 282 (identical input fed to every backend)
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 961.37ms; generated 16 tokens with 15 decode steps in 854.46ms (17.55 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 101.04ms; generated 16 tokens with 15 decode steps in 397.95ms (37.69 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       961.37ms     854.46ms          17.55        16
+cublas       101.04ms     397.95ms          37.69        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 8.425e-3 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 961.37ms | cublas 101.04ms  ->  cublas 9.51x faster
+  decode:  custom 854.46ms | cublas 397.95ms  ->  cublas 2.15x faster
+  end-to-end: custom 1.82s | cublas 498.98ms  ->  cublas 3.64x faster
+
+--- Prompt 6/9: 6 - Multi-step arithmetic ---
+Input prompt:
+A library has 6 shelves with 14 books on each shelf. It lends 19 books. Show
+one calculation and state how many books remain in one complete sentence.
+Input tokens: 56 (identical input fed to every backend)
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+The library originally has \(6 \times 14 = 84\)
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 327.27ms; generated 16 tokens with 15 decode steps in 843.13ms (17.79 decode tok/s)
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+The library originally has \(6 \times 14 = 84\)
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 40.42ms; generated 16 tokens with 15 decode steps in 386.31ms (38.83 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       327.27ms     843.13ms          17.79        16
+cublas        40.42ms     386.31ms          38.83        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.926e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 327.27ms | cublas 40.42ms  ->  cublas 8.10x faster
+  decode:  custom 843.13ms | cublas 386.31ms  ->  cublas 2.18x faster
+  end-to-end: custom 1.17s | cublas 426.73ms  ->  cublas 2.74x faster
+
+--- Prompt 7/9: 7 - Compare totals ---
+Input prompt:
+Run A generated 8 tokens for each of 120 prompts. Run B generated 12 tokens for
+each of the same 120 prompts. Which run generated more tokens, and by how many?
+Show the calculation and answer in one sentence.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 7 - Compare totals -> generated output:
+Run B generated more tokens, producing 480 more tokens than Run A
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 415.54ms; generated 16 tokens with 15 decode steps in 843.35ms (17.79 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run B generated more tokens, producing 480 more tokens than Run A
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 55.43ms; generated 16 tokens with 15 decode steps in 386.80ms (38.78 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       415.54ms     843.35ms          17.79        16
+cublas        55.43ms     386.80ms          38.78        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.248e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 415.54ms | cublas 55.43ms  ->  cublas 7.50x faster
+  decode:  custom 843.35ms | cublas 386.80ms  ->  cublas 2.18x faster
+  end-to-end: custom 1.26s | cublas 442.23ms  ->  cublas 2.85x faster
+
+--- Prompt 8/9: 8 - Exact format ---
+Input prompt:
+Return exactly one JSON object with the keys "answer" and "check". Set "answer"
+to the result of 3 times 7 and "check" to the string "3 x 7". Do not include
+Markdown or any text outside the JSON object.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 414.97ms; generated 16 tokens with 15 decode steps in 843.80ms (17.78 decode tok/s)
+
+[cublas] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 55.34ms; generated 16 tokens with 15 decode steps in 387.29ms (38.73 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       414.97ms     843.80ms          17.78        16
+cublas        55.34ms     387.29ms          38.73        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.847e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 414.97ms | cublas 55.34ms  ->  cublas 7.50x faster
+  decode:  custom 843.80ms | cublas 387.29ms  ->  cublas 2.18x faster
+  end-to-end: custom 1.26s | cublas 442.64ms  ->  cublas 2.84x faster
+
+--- Prompt 9/9: 9 - Time extraction ---
+Input prompt:
+The workshop began setup at 9:00 AM. Doors opened at 10:30 AM, and the event
+ended at 12:00 PM. How much time passed between the doors opening and the event
+ending? Answer in minutes in one complete sentence.
+Input tokens: 78 (identical input fed to every backend)
+
+[custom] 9 - Time extraction -> generated output:
+The event lasted 1.5 hours, which is 90 minutes,
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 415.54ms; generated 16 tokens with 15 decode steps in 844.07ms (17.77 decode tok/s)
+
+[cublas] 9 - Time extraction -> generated output:
+The event lasted 1.5 hours, which is 90 minutes,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 55.86ms; generated 16 tokens with 15 decode steps in 388.26ms (38.63 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       415.54ms     844.07ms          17.77        16
+cublas        55.86ms     388.26ms          38.63        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.138e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 415.54ms | cublas 55.86ms  ->  cublas 7.44x faster
+  decode:  custom 844.07ms | cublas 388.26ms  ->  cublas 2.17x faster
+  end-to-end: custom 1.26s | cublas 444.12ms  ->  cublas 2.84x faster
+
+[static request batch suite] Requests arrive together; every prompt owns an independent KV cache.
+Prefill uses the existing per-request GEMM path; decode projections/MLP/logits use a GPU request batch; attention launches against each request's own cache.
+
+--- GPU request batch: size=1, case=single-request, backend=custom ---
+Requests: 1 - Tiny context
+
+[custom] 1 - Tiny context -> generated output:
+7 + 5 is 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 308.26ms; generated 9 tokens with 9 decode steps in 504.82ms (17.83 decode tok/s)
+Batch prefill total (serial prompts): 310.51 ms; batched decode: 510.98 ms; aggregate decode throughput: 17.61 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=310.51 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=single-request,batch=1,request=1 - Tiny context,input_tokens=33,prefill_ms=310.506,batch_decode_ms=510.982,batch_output_tok_s=17.613,output_tokens=9,identical=true
+
+--- GPU request batch: size=1, case=single-request, backend=cublas ---
+Requests: 1 - Tiny context
+
+[cublas] 1 - Tiny context -> generated output:
+7 + 5 is 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 37.92ms; generated 9 tokens with 9 decode steps in 231.00ms (38.96 decode tok/s)
+Batch prefill total (serial prompts): 38.85 ms; batched decode: 237.36 ms; aggregate decode throughput: 37.92 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=38.85 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=single-request,batch=1,request=1 - Tiny context,input_tokens=33,prefill_ms=38.852,batch_decode_ms=237.356,batch_output_tok_s=37.918,output_tokens=9,identical=true
+
+--- GPU request batch: size=1, case=single-request, backend=custom ---
+Requests: 9 - Time extraction
+
+[custom] 9 - Time extraction -> generated output:
+The event lasted 1.5 hours, which is 90 minutes,
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 415.41ms; generated 16 tokens with 15 decode steps in 843.91ms (17.77 decode tok/s)
+Batch prefill total (serial prompts): 416.81 ms; batched decode: 853.63 ms; aggregate decode throughput: 18.74 output tok/s
+request=9 - Time extraction input_tokens=78 prefill_ms=416.81 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=single-request,batch=1,request=9 - Time extraction,input_tokens=78,prefill_ms=416.808,batch_decode_ms=853.626,batch_output_tok_s=18.744,output_tokens=16,identical=true
+
+--- GPU request batch: size=1, case=single-request, backend=cublas ---
+Requests: 9 - Time extraction
+
+[cublas] 9 - Time extraction -> generated output:
+The event lasted 1.5 hours, which is 90 minutes,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 55.73ms; generated 16 tokens with 15 decode steps in 387.87ms (38.67 decode tok/s)
+Batch prefill total (serial prompts): 56.75 ms; batched decode: 397.21 ms; aggregate decode throughput: 40.28 output tok/s
+request=9 - Time extraction input_tokens=78 prefill_ms=56.75 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=single-request,batch=1,request=9 - Time extraction,input_tokens=78,prefill_ms=56.755,batch_decode_ms=397.212,batch_output_tok_s=40.281,output_tokens=16,identical=true
+
+--- GPU request batch: size=2, case=prompt-window, backend=custom ---
+Requests: 1 - Tiny context | 2 - Short context
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time allows for isolating the impact of each modification
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 322.80ms; generated 16 tokens with 15 decode steps in 842.00ms (17.81 decode tok/s)
+Batch prefill total (serial prompts): 637.61 ms; batched decode: 3581.84 ms; aggregate decode throughput: 6.98 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=311.27 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=prompt-window,batch=2,request=1 - Tiny context,input_tokens=33,prefill_ms=311.268,batch_decode_ms=3581.839,batch_output_tok_s=6.980,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=326.34 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=prompt-window,batch=2,request=2 - Short context,input_tokens=45,prefill_ms=326.339,batch_decode_ms=3581.839,batch_output_tok_s=6.980,output_tokens=16,identical=true
+
+--- GPU request batch: size=2, case=prompt-window, backend=cublas ---
+Requests: 1 - Tiny context | 2 - Short context
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time allows for isolating the impact of each modification
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 38.95ms; generated 16 tokens with 15 decode steps in 385.77ms (38.88 decode tok/s)
+Batch prefill total (serial prompts): 78.68 ms; batched decode: 435.03 ms; aggregate decode throughput: 57.47 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=38.99 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=prompt-window,batch=2,request=1 - Tiny context,input_tokens=33,prefill_ms=38.985,batch_decode_ms=435.025,batch_output_tok_s=57.468,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=39.69 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=prompt-window,batch=2,request=2 - Short context,input_tokens=45,prefill_ms=39.690,batch_decode_ms=435.025,batch_output_tok_s=57.468,output_tokens=16,identical=true
+
+--- GPU request batch: size=2, case=prompt-window, backend=custom ---
+Requests: 8 - Exact format | 9 - Time extraction
+
+[custom] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 414.68ms; generated 16 tokens with 15 decode steps in 843.81ms (17.78 decode tok/s)
+Batch prefill total (serial prompts): 830.89 ms; batched decode: 3588.82 ms; aggregate decode throughput: 8.92 output tok/s
+request=8 - Exact format input_tokens=73 prefill_ms=415.39 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=prompt-window,batch=2,request=8 - Exact format,input_tokens=73,prefill_ms=415.393,batch_decode_ms=3588.818,batch_output_tok_s=8.917,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=415.50 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=prompt-window,batch=2,request=9 - Time extraction,input_tokens=78,prefill_ms=415.501,batch_decode_ms=3588.818,batch_output_tok_s=8.917,output_tokens=16,identical=true
+
+--- GPU request batch: size=2, case=prompt-window, backend=cublas ---
+Requests: 8 - Exact format | 9 - Time extraction
+
+[cublas] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 56.10ms; generated 16 tokens with 15 decode steps in 387.29ms (38.73 decode tok/s)
+Batch prefill total (serial prompts): 113.63 ms; batched decode: 437.22 ms; aggregate decode throughput: 73.19 output tok/s
+request=8 - Exact format input_tokens=73 prefill_ms=57.36 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=prompt-window,batch=2,request=8 - Exact format,input_tokens=73,prefill_ms=57.356,batch_decode_ms=437.220,batch_output_tok_s=73.190,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=56.28 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=prompt-window,batch=2,request=9 - Time extraction,input_tokens=78,prefill_ms=56.278,batch_decode_ms=437.220,batch_output_tok_s=73.190,output_tokens=16,identical=true
+
+--- GPU request batch: size=5, case=mixed-short-long, backend=custom ---
+Requests: 1 - Tiny context | 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure
+
+[custom] 3 - Medium context -> generated output:
+Reliable software is built by independently checking each layer of a system, and useful
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 539.16ms; generated 16 tokens with 15 decode steps in 848.10ms (17.69 decode tok/s)
+
+[custom] 4 - Long context -> generated output:
+Grouped-query attention allows multiple query heads to share a key and value head.
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 1.11s; generated 16 tokens with 15 decode steps in 856.10ms (17.52 decode tok/s)
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 961.83ms; generated 16 tokens with 15 decode steps in 854.32ms (17.56 decode tok/s)
+Batch prefill total (serial prompts): 3258.42 ms; batched decode: 3678.14 ms; aggregate decode throughput: 19.85 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=312.90 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=1 - Tiny context,input_tokens=33,prefill_ms=312.900,batch_decode_ms=3678.138,batch_output_tok_s=19.847,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=328.23 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=2 - Short context,input_tokens=45,prefill_ms=328.234,batch_decode_ms=3678.138,batch_output_tok_s=19.847,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=543.14 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=3 - Medium context,input_tokens=154,prefill_ms=543.141,batch_decode_ms=3678.138,batch_output_tok_s=19.847,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=1111.23 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=4 - Long context,input_tokens=321,prefill_ms=1111.230,batch_decode_ms=3678.138,batch_output_tok_s=19.847,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=962.91 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=962.911,batch_decode_ms=3678.138,batch_output_tok_s=19.847,output_tokens=16,identical=true
+
+--- GPU request batch: size=5, case=mixed-short-long, backend=cublas ---
+Requests: 1 - Tiny context | 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure
+
+[cublas] 3 - Medium context -> generated output:
+Reliable software is built by independently checking each layer of a system, and useful
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 77.54ms; generated 16 tokens with 15 decode steps in 392.20ms (38.25 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+Grouped-query attention allows multiple query heads to share a key and value head.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 108.89ms; generated 16 tokens with 15 decode steps in 400.79ms (37.43 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 100.78ms; generated 16 tokens with 15 decode steps in 399.08ms (37.59 decode tok/s)
+Batch prefill total (serial prompts): 362.48 ms; batched decode: 514.33 ms; aggregate decode throughput: 141.93 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=39.10 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=1 - Tiny context,input_tokens=33,prefill_ms=39.096,batch_decode_ms=514.326,batch_output_tok_s=141.933,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=39.39 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=2 - Short context,input_tokens=45,prefill_ms=39.388,batch_decode_ms=514.326,batch_output_tok_s=141.933,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=76.55 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=3 - Medium context,input_tokens=154,prefill_ms=76.548,batch_decode_ms=514.326,batch_output_tok_s=141.933,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=107.44 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=4 - Long context,input_tokens=321,prefill_ms=107.441,batch_decode_ms=514.326,batch_output_tok_s=141.933,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=100.01 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=100.009,batch_decode_ms=514.326,batch_output_tok_s=141.933,output_tokens=16,identical=true
+
+--- GPU request batch: size=5, case=mixed-short-long, backend=custom ---
+Requests: 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format | 9 - Time extraction
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+The library originally has \(6 \times 14 = 84\)
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 327.99ms; generated 16 tokens with 15 decode steps in 842.89ms (17.80 decode tok/s)
+
+[custom] 7 - Compare totals -> generated output:
+Run B generated more tokens, producing 480 more tokens than Run A
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 416.49ms; generated 16 tokens with 15 decode steps in 843.80ms (17.78 decode tok/s)
+Batch prefill total (serial prompts): 2528.93 ms; batched decode: 3653.90 ms; aggregate decode throughput: 21.89 output tok/s
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=958.44 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=958.440,batch_decode_ms=3653.896,batch_output_tok_s=21.894,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=327.21 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=327.215,batch_decode_ms=3653.896,batch_output_tok_s=21.894,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=414.16 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=7 - Compare totals,input_tokens=73,prefill_ms=414.163,batch_decode_ms=3653.896,batch_output_tok_s=21.894,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=414.25 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=8 - Exact format,input_tokens=73,prefill_ms=414.246,batch_decode_ms=3653.896,batch_output_tok_s=21.894,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=414.86 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=5,request=9 - Time extraction,input_tokens=78,prefill_ms=414.863,batch_decode_ms=3653.896,batch_output_tok_s=21.894,output_tokens=16,identical=true
+
+--- GPU request batch: size=5, case=mixed-short-long, backend=cublas ---
+Requests: 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format | 9 - Time extraction
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+The library originally has \(6 \times 14 = 84\)
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 40.35ms; generated 16 tokens with 15 decode steps in 386.42ms (38.82 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run B generated more tokens, producing 480 more tokens than Run A
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 55.48ms; generated 16 tokens with 15 decode steps in 386.98ms (38.76 decode tok/s)
+Batch prefill total (serial prompts): 305.03 ms; batched decode: 498.73 ms; aggregate decode throughput: 160.41 output tok/s
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=99.86 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=99.860,batch_decode_ms=498.734,batch_output_tok_s=160.406,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=40.03 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=40.031,batch_decode_ms=498.734,batch_output_tok_s=160.406,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=54.87 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=7 - Compare totals,input_tokens=73,prefill_ms=54.873,batch_decode_ms=498.734,batch_output_tok_s=160.406,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=54.88 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=8 - Exact format,input_tokens=73,prefill_ms=54.883,batch_decode_ms=498.734,batch_output_tok_s=160.406,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=55.38 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=5,request=9 - Time extraction,input_tokens=78,prefill_ms=55.378,batch_decode_ms=498.734,batch_output_tok_s=160.406,output_tokens=16,identical=true
+
+--- GPU request batch: size=8, case=mixed-short-long, backend=custom ---
+Requests: 1 - Tiny context | 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format
+Batch prefill total (serial prompts): 4409.40 ms; batched decode: 3792.70 ms; aggregate decode throughput: 31.90 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=310.22 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=1 - Tiny context,input_tokens=33,prefill_ms=310.221,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=321.14 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=2 - Short context,input_tokens=45,prefill_ms=321.136,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=544.34 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=3 - Medium context,input_tokens=154,prefill_ms=544.337,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=1112.21 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=4 - Long context,input_tokens=321,prefill_ms=1112.213,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=962.39 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=962.393,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=328.16 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=328.157,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=415.34 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=7 - Compare totals,input_tokens=73,prefill_ms=415.337,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=415.60 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=8 - Exact format,input_tokens=73,prefill_ms=415.603,batch_decode_ms=3792.698,batch_output_tok_s=31.903,output_tokens=16,identical=true
+
+--- GPU request batch: size=8, case=mixed-short-long, backend=cublas ---
+Requests: 1 - Tiny context | 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format
+Batch prefill total (serial prompts): 511.51 ms; batched decode: 558.68 ms; aggregate decode throughput: 216.58 output tok/s
+request=1 - Tiny context input_tokens=33 prefill_ms=39.80 output_tokens=9 identical_to_single=true output=7 + 5 is 12.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=1 - Tiny context,input_tokens=33,prefill_ms=39.799,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=9,identical=true
+request=2 - Short context input_tokens=45 prefill_ms=39.25 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=2 - Short context,input_tokens=45,prefill_ms=39.252,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=77.07 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=3 - Medium context,input_tokens=154,prefill_ms=77.066,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=105.09 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=4 - Long context,input_tokens=321,prefill_ms=105.091,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=100.04 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=100.036,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=39.94 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=39.943,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=55.08 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=7 - Compare totals,input_tokens=73,prefill_ms=55.085,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=55.23 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=8 - Exact format,input_tokens=73,prefill_ms=55.233,batch_decode_ms=558.677,batch_output_tok_s=216.583,output_tokens=16,identical=true
+
+--- GPU request batch: size=8, case=mixed-short-long, backend=custom ---
+Requests: 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format | 9 - Time extraction
+Batch prefill total (serial prompts): 4506.41 ms; batched decode: 3784.49 ms; aggregate decode throughput: 33.82 output tok/s
+request=2 - Short context input_tokens=45 prefill_ms=324.53 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=2 - Short context,input_tokens=45,prefill_ms=324.532,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=544.26 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=3 - Medium context,input_tokens=154,prefill_ms=544.262,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=1108.20 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=4 - Long context,input_tokens=321,prefill_ms=1108.200,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=959.28 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=959.283,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=325.51 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=325.509,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=414.54 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=7 - Compare totals,input_tokens=73,prefill_ms=414.538,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=414.54 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=8 - Exact format,input_tokens=73,prefill_ms=414.541,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=415.55 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=custom,case=mixed-short-long,batch=8,request=9 - Time extraction,input_tokens=78,prefill_ms=415.547,batch_decode_ms=3784.493,batch_output_tok_s=33.822,output_tokens=16,identical=true
+
+--- GPU request batch: size=8, case=mixed-short-long, backend=cublas ---
+Requests: 2 - Short context | 3 - Medium context | 4 - Long context | 5 - Long context with repeated structure | 6 - Multi-step arithmetic | 7 - Compare totals | 8 - Exact format | 9 - Time extraction
+Batch prefill total (serial prompts): 526.43 ms; batched decode: 561.56 ms; aggregate decode throughput: 227.94 output tok/s
+request=2 - Short context input_tokens=45 prefill_ms=39.38 output_tokens=16 identical_to_single=true output=Changing one kernel detail at a time allows for isolating the impact of each modification
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=2 - Short context,input_tokens=45,prefill_ms=39.378,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=3 - Medium context input_tokens=154 prefill_ms=77.05 output_tokens=16 identical_to_single=true output=Reliable software is built by independently checking each layer of a system, and useful
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=3 - Medium context,input_tokens=154,prefill_ms=77.047,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=4 - Long context input_tokens=321 prefill_ms=104.95 output_tokens=16 identical_to_single=true output=Grouped-query attention allows multiple query heads to share a key and value head.
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=4 - Long context,input_tokens=321,prefill_ms=104.949,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=5 - Long context with repeated structure input_tokens=282 prefill_ms=99.62 output_tokens=16 identical_to_single=true output=The key-value cache saves the model from recomputing the numeric values associated with
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=5 - Long context with repeated structure,input_tokens=282,prefill_ms=99.619,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=6 - Multi-step arithmetic input_tokens=56 prefill_ms=39.91 output_tokens=16 identical_to_single=true output=The library originally has \(6 \times 14 = 84\)
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=6 - Multi-step arithmetic,input_tokens=56,prefill_ms=39.910,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=7 - Compare totals input_tokens=73 prefill_ms=54.78 output_tokens=16 identical_to_single=true output=Run B generated more tokens, producing 480 more tokens than Run A
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=7 - Compare totals,input_tokens=73,prefill_ms=54.775,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=8 - Exact format input_tokens=73 prefill_ms=55.17 output_tokens=16 identical_to_single=true output={"answer": 21, "check": "3 x 7"}
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=8 - Exact format,input_tokens=73,prefill_ms=55.167,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+request=9 - Time extraction input_tokens=78 prefill_ms=55.58 output_tokens=16 identical_to_single=true output=The event lasted 1.5 hours, which is 90 minutes,
+REQUEST_BATCH_RESULT,model_hidden=3584,layers=28,backend=cublas,case=mixed-short-long,batch=8,request=9 - Time extraction,input_tokens=78,prefill_ms=55.584,batch_decode_ms=561.556,batch_output_tok_s=227.938,output_tokens=16,identical=true
+
+============================================================
+ Inference finished successfully on GPU 1!
+============================================================

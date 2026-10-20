@@ -289,3 +289,19 @@ For a direct same-FP16 cross-model comparison across all nine prompts on
 [FP16 comparison section](HISTORY_BENCHMARK.md#same-precision-cross-model-comparison-fp16)
 and its filtered
 [`fp16_comparison.csv`](benchmark-results/precision-2026-10-20/fp16_comparison.csv).
+
+## Static independent-request GPU batches
+
+The engine now has `--request-batch-sizes 1,2,5,8` for static request groups
+drawn from `BASE_PROMPTS.txt`. Each request has a distinct prompt and its own
+KV cache. The request rows are batched on GPU for decode projections, norms,
+MLP, logits, and argmax, with per-request positions for mixed prompt lengths.
+The current attention kernel still launches separately for each request, and
+initial prompt prefill runs one request at a time; the benchmark reports those
+prefill times separately from batched decode. This identifies the remaining
+work before the whole transformer step is a single batched attention path.
+
+The full FP16 results for Qwen2.5-1.5B/3B/7B/14B, on both custom and cuBLAS,
+are in the [static batch section of HISTORY_BENCHMARK.md](HISTORY_BENCHMARK.md#static-independent-request-gpu-batches-2026-10-20).
+That section links 64 per-case group records, 256 per-request correctness and
+timing rows, 72 standalone prompt/backend rows, and four complete logs.

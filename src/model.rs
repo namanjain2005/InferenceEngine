@@ -1,7 +1,7 @@
 use crate::config::ModelConfig;
+use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use crate::kernels::LinearOp;
 use crate::kernels::LinearWeights;
-use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
 use std::sync::Arc;
@@ -229,6 +229,19 @@ impl KVCache {
 }
 
 impl Qwen2Model {
+    pub fn new_cache_with_capacity(
+        &self,
+        stream: &Arc<CudaStream>,
+        capacity: usize,
+    ) -> Result<KVCache, String> {
+        KVCache::with_capacity(
+            stream,
+            self.config.num_hidden_layers,
+            capacity,
+            self.config.num_key_value_heads * self.config.head_dim(),
+        )
+    }
+
     pub fn load(
         st: &mut SafeTensors,
         config: ModelConfig,
@@ -481,6 +494,200 @@ impl Qwen2Model {
             x = vector.add(stream, &x, &mlp_out)?;
         }
         Ok(x)
+    }
+
+    /// Run one autoregressive decode step for independent requests together.
+    /// Projection, normalization, MLP, and logits operations use a GPU batch;
+    /// each row keeps and attends to its own KV cache and absolute position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_decode_batch(
+        &self,
+        token_ids: &[usize],
+        positions: &[usize],
+        caches: &mut [KVCache],
+        linear: &dyn LinearOp,
+        rmsnorm: &RmsNormKernel,
+        swiglu: &SwiGluKernel,
+        attention: &AttentionKernel,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String> {
+        let batch = token_ids.len();
+        if batch == 0 || positions.len() != batch || caches.len() != batch {
+            return Err(
+                "Decode batch requires matching non-empty token, position, and cache lists".into(),
+            );
+        }
+        let hidden = self.config.hidden_size;
+        let q_dim = self.config.num_attention_heads * self.config.head_dim();
+        let kv_dim = self.config.num_key_value_heads * self.config.head_dim();
+        for (cache, &pos) in caches.iter_mut().zip(positions) {
+            cache.ensure_capacity(
+                stream,
+                pos.checked_add(1).ok_or("Token position overflow")?,
+                pos,
+            )?;
+        }
+        let mut x = vector.embedding_batch(stream, &self.embed_tokens, token_ids, hidden)?;
+
+        for (layer_index, layer) in self.layers.iter().enumerate() {
+            let x_norm = rmsnorm.forward_batch(
+                stream,
+                &x,
+                &layer.input_layernorm,
+                batch,
+                hidden,
+                self.config.rms_norm_eps,
+            )?;
+            let q = linear.gemm_weight(
+                stream,
+                &x_norm,
+                &layer.q_proj_weight,
+                Some(&layer.q_proj_bias),
+                batch,
+                hidden,
+                q_dim,
+            )?;
+            let k = linear.gemm_weight(
+                stream,
+                &x_norm,
+                &layer.k_proj_weight,
+                Some(&layer.k_proj_bias),
+                batch,
+                hidden,
+                kv_dim,
+            )?;
+            let v = linear.gemm_weight(
+                stream,
+                &x_norm,
+                &layer.v_proj_weight,
+                Some(&layer.v_proj_bias),
+                batch,
+                hidden,
+                kv_dim,
+            )?;
+            let (q, k) = vector.rope_batch_positions(
+                stream,
+                &q,
+                &k,
+                positions,
+                self.config.num_attention_heads,
+                self.config.num_key_value_heads,
+                self.config.head_dim(),
+                self.config.rope_theta,
+            )?;
+            let mut attn_batch = stream
+                .alloc_zeros::<f32>(batch * q_dim)
+                .map_err(|e| format!("Allocating request-batch attention output failed: {e}"))?;
+            for row in 0..batch {
+                let q_row = vector.gather_row(stream, &q, row, batch, q_dim)?;
+                let k_row = vector.gather_row(stream, &k, row, batch, kv_dim)?;
+                let v_row = vector.gather_row(stream, &v, row, batch, kv_dim)?;
+                let cache = &mut caches[row];
+                let layer_cache = &mut cache.layers[layer_index];
+                vector.append_cache(
+                    stream,
+                    &k_row,
+                    &v_row,
+                    &mut layer_cache.k,
+                    &mut layer_cache.v,
+                    positions[row],
+                    kv_dim,
+                )?;
+                let attn = attention.forward(
+                    stream,
+                    &q_row,
+                    &layer_cache.k,
+                    &layer_cache.v,
+                    positions[row] + 1,
+                    self.config.num_attention_heads,
+                    self.config.num_key_value_heads,
+                    self.config.head_dim(),
+                )?;
+                stream
+                    .memcpy_dtod(
+                        &attn,
+                        &mut attn_batch.slice_mut(row * q_dim..(row + 1) * q_dim),
+                    )
+                    .map_err(|e| format!("Copying request attention row failed: {e}"))?;
+            }
+            let attn_proj = linear.gemm_weight(
+                stream,
+                &attn_batch,
+                &layer.o_proj_weight,
+                None,
+                batch,
+                q_dim,
+                hidden,
+            )?;
+            x = vector.add(stream, &x, &attn_proj)?;
+            let mlp_norm = rmsnorm.forward_batch(
+                stream,
+                &x,
+                &layer.post_attention_layernorm,
+                batch,
+                hidden,
+                self.config.rms_norm_eps,
+            )?;
+            let intermediate = self.config.intermediate_size;
+            let gate = linear.gemm_weight(
+                stream,
+                &mlp_norm,
+                &layer.gate_proj_weight,
+                None,
+                batch,
+                hidden,
+                intermediate,
+            )?;
+            let up = linear.gemm_weight(
+                stream,
+                &mlp_norm,
+                &layer.up_proj_weight,
+                None,
+                batch,
+                hidden,
+                intermediate,
+            )?;
+            let act = swiglu.forward(stream, &gate, &up)?;
+            let mlp_out = linear.gemm_weight(
+                stream,
+                &act,
+                &layer.down_proj_weight,
+                None,
+                batch,
+                intermediate,
+                hidden,
+            )?;
+            x = vector.add(stream, &x, &mlp_out)?;
+        }
+        let final_norm = rmsnorm.forward_batch(
+            stream,
+            &x,
+            &self.norm,
+            batch,
+            hidden,
+            self.config.rms_norm_eps,
+        )?;
+        match &self.lm_head {
+            Some(weight) => linear.gemm_weight(
+                stream,
+                &final_norm,
+                weight,
+                None,
+                batch,
+                hidden,
+                self.config.vocab_size,
+            ),
+            None => linear.gemm(
+                stream,
+                &final_norm,
+                &self.embed_tokens,
+                None,
+                batch,
+                hidden,
+                self.config.vocab_size,
+            ),
+        }
     }
 }
 
