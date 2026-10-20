@@ -489,3 +489,26 @@ observations on the shared host and are retained as per-prompt evidence in the
 logs; they are not a performance comparison against a prior revision because
 the same strategy implementation and measurement conditions are not archived
 for that revision.
+
+### KV-cache facade API follow-up (commit `b6cc9d3`, 2026-10-20)
+
+The public `KVCache` facade now has an explicit constructor and forwards the
+model operations to the selected `KVCacheState`. `KVCacheStrategy::new` creates
+the implementation state; `KVCache::new(&config, stream, shape)` returns the
+stable facade. Its operations are `ensure_capacity`, `append`, `append_prompt`,
+`attend_decode`, and `attend_prefill`, with their GPU tensors, model dimensions,
+kernels, and stream passed explicitly. This keeps caller-facing cache
+operations uniform while leaving the state trait as the strategy extension
+point.
+
+Validation after the facade change: `cargo test --all-targets` passed (2
+library tests; other targets passed with 0 tests), and `cargo check` passed.
+The full nine-prompt FP16 suite passed on custom and cuBLAS for 1.5B, 3B, and
+7B on GPU 1, and for 14B on GPU 4. Each run had identical generated tokens
+between backends and zero non-finite logits. The 14B attempt on GPU 1 failed
+during weight upload with CUDA out of memory while shared GPU memory was
+constrained; retrying on GPU 4 completed. Full output and per-prompt timings
+are archived in [`benchmark-results/kv-cache-facade-2026-10-20/`](benchmark-results/kv-cache-facade-2026-10-20/).
+The facade also passed all 64 static request records for the 1.5B model on
+custom and cuBLAS across batch sizes 1, 2, 5, and 8; every record matched its
+single-request reference.

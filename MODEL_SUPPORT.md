@@ -48,6 +48,24 @@ layout. Strategy-specific settings can live in the strategy value passed to
 setting for the naive strategy and can be interpreted by other strategies as
 an initial token or block budget.
 
+`KVCache` is the stable facade. Construct it with `KVCache::new(&config,
+stream, shape)`. Its methods take the layer, logical position or prompt
+range, device K/V or query tensors, head dimensions, kernels, and CUDA stream
+needed for the operation. The main methods are:
+
+- `ensure_capacity(stream, needed, preserve)`
+- `append(layer, position, key, value, vector, stream)` for one decode token
+- `append_prompt(layer, start_position, batch, keys, values, vector, stream)`
+- `attend_decode(layer, query, sequence_length, num_query_heads,
+  num_kv_heads, head_dim, attention, stream)`
+- `attend_prefill(layer, query, start_position, batch, num_query_heads,
+  num_kv_heads, head_dim, attention, stream)`
+
+Each strategy implements `KVCacheStrategy::new` to create its request-local
+`KVCacheState`; the facade forwards operations to that state. This keeps the
+model-facing call shape stable while each strategy controls the physical
+cache layout and implementation.
+
 ## Checkpoint validation
 
 Download the additional local checkpoints with:

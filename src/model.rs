@@ -2,13 +2,12 @@ use crate::config::ModelConfig;
 use crate::kernels::LinearOp;
 use crate::kernels::LinearWeights;
 use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
-use crate::kv_cache::{KVCacheShape, KVCacheState};
+use crate::kv_cache::KVCacheShape;
 use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
 use std::sync::Arc;
 
-pub use crate::kv_cache::{DEFAULT_KV_CACHE_CAPACITY, KVCacheConfig};
-pub type KVCache = Box<dyn KVCacheState>;
+pub use crate::kv_cache::{DEFAULT_KV_CACHE_CAPACITY, KVCache, KVCacheConfig};
 
 pub struct LayerWeights {
     input_layernorm: CudaSlice<f32>,
@@ -347,7 +346,7 @@ impl Qwen2Model {
                 self.config.head_dim(),
                 self.config.rope_theta,
             )?;
-            cache.append_token(l, pos, &k, &v, vector, stream)?;
+            cache.append(l, pos, &k, &v, vector, stream)?;
             let attn_out = cache.attend_decode(
                 l,
                 &q,
@@ -487,7 +486,7 @@ impl Qwen2Model {
                 let k_row = vector.gather_row(stream, &k, row, batch, kv_dim)?;
                 let v_row = vector.gather_row(stream, &v, row, batch, kv_dim)?;
                 let cache = &mut caches[row];
-                cache.append_token(layer_index, positions[row], &k_row, &v_row, vector, stream)?;
+                cache.append(layer_index, positions[row], &k_row, &v_row, vector, stream)?;
                 let attn = cache.attend_decode(
                     layer_index,
                     &q_row,

@@ -20,7 +20,8 @@ pub struct KVCacheShape {
 pub trait KVCacheStrategy: Send + Sync {
     fn name(&self) -> &'static str;
 
-    fn create(
+    /// Construct a request-local cache state using this strategy.
+    fn new(
         &self,
         stream: &Arc<CudaStream>,
         shape: KVCacheShape,
@@ -48,7 +49,8 @@ pub trait KVCacheState {
         preserve: usize,
     ) -> Result<(), String>;
 
-    fn append_token(
+    /// Append one generated token's K/V values for a layer.
+    fn append(
         &mut self,
         layer: usize,
         position: usize,
@@ -128,12 +130,129 @@ impl KVCacheConfig {
         &self,
         stream: &Arc<CudaStream>,
         shape: KVCacheShape,
-    ) -> Result<Box<dyn KVCacheState>, String> {
-        self.strategy.create(stream, shape, self.initial_capacity)
+    ) -> Result<KVCache, String> {
+        KVCache::new(self, stream, shape)
     }
 
     pub fn with_initial_capacity(&self, initial_capacity: usize) -> Result<Self, String> {
         Self::new(self.strategy.clone(), initial_capacity)
+    }
+}
+
+/// Stable model-facing handle for a strategy-selected request cache.
+///
+/// The facade keeps cache construction and operations uniform while the
+/// selected [`KVCacheState`] owns its physical representation.
+pub struct KVCache {
+    state: Box<dyn KVCacheState>,
+}
+
+impl KVCache {
+    pub fn new(
+        config: &KVCacheConfig,
+        stream: &Arc<CudaStream>,
+        shape: KVCacheShape,
+    ) -> Result<Self, String> {
+        let state = config
+            .strategy
+            .new(stream, shape, config.initial_capacity)?;
+        Ok(Self { state })
+    }
+
+    pub fn strategy_name(&self) -> &'static str {
+        self.state.strategy_name()
+    }
+
+    pub fn num_layers(&self) -> usize {
+        self.state.num_layers()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.state.capacity()
+    }
+
+    pub fn ensure_capacity(
+        &mut self,
+        stream: &Arc<CudaStream>,
+        needed: usize,
+        preserve: usize,
+    ) -> Result<(), String> {
+        self.state.ensure_capacity(stream, needed, preserve)
+    }
+
+    pub fn append(
+        &mut self,
+        layer: usize,
+        position: usize,
+        key: &CudaSlice<f32>,
+        value: &CudaSlice<f32>,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<(), String> {
+        self.state
+            .append(layer, position, key, value, vector, stream)
+    }
+
+    pub fn append_prompt(
+        &mut self,
+        layer: usize,
+        start_position: usize,
+        batch: usize,
+        keys: &CudaSlice<f32>,
+        values: &CudaSlice<f32>,
+        vector: &VectorKernels,
+        stream: &Arc<CudaStream>,
+    ) -> Result<(), String> {
+        self.state
+            .append_prompt(layer, start_position, batch, keys, values, vector, stream)
+    }
+
+    pub fn attend_decode(
+        &mut self,
+        layer: usize,
+        query: &CudaSlice<f32>,
+        sequence_length: usize,
+        num_query_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        attention: &AttentionKernel,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.state.attend_decode(
+            layer,
+            query,
+            sequence_length,
+            num_query_heads,
+            num_kv_heads,
+            head_dim,
+            attention,
+            stream,
+        )
+    }
+
+    pub fn attend_prefill(
+        &mut self,
+        layer: usize,
+        query: &CudaSlice<f32>,
+        start_position: usize,
+        batch: usize,
+        num_query_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        attention: &AttentionKernel,
+        stream: &Arc<CudaStream>,
+    ) -> Result<CudaSlice<f32>, String> {
+        self.state.attend_prefill(
+            layer,
+            query,
+            start_position,
+            batch,
+            num_query_heads,
+            num_kv_heads,
+            head_dim,
+            attention,
+            stream,
+        )
     }
 }
 
@@ -158,7 +277,7 @@ impl KVCacheStrategy for NaiveKVCacheStrategy {
         "naive"
     }
 
-    fn create(
+    fn new(
         &self,
         stream: &Arc<CudaStream>,
         shape: KVCacheShape,
@@ -288,7 +407,7 @@ impl KVCacheState for NaiveKVCache {
         Ok(())
     }
 
-    fn append_token(
+    fn append(
         &mut self,
         layer: usize,
         position: usize,

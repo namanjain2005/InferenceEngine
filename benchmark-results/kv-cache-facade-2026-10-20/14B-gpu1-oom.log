@@ -1,0 +1,24 @@
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running `target/release/Engine --gpu 1 --model-dir models/Qwen2.5-14B-Instruct --max-tokens 16 --linear both --weight-format fp16`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 1.
+[2/5] Initializing CUDA Context on GPU 1...
+Initializing CUDA Context on GPU 1...
+CUDA Context and default stream ready on GPU 1.
+   -> Linear backend(s): custom, cublas
+   -> Projection weight format: F16 (FP32 activations and accumulation)
+   -> GPU 1 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-14B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 48 layers, hidden=5120, intermediate=13824, 40 q_heads, 8 kv_heads (GQA)
+   -> Safetensors opened: 579 tensors in header.
+   -> Validated 14770033664 parameters (27.51 GiB source weights; 28.96 GiB estimated resident weights as F16).
+   Uploading embedding and final norm weights to GPU...
+   Loading and uploading layer weights: 1/48   Loading and uploading layer weights: 2/48   Loading and uploading layer weights: 3/48   Loading and uploading layer weights: 4/48   Loading and uploading layer weights: 5/48   Loading and uploading layer weights: 6/48   Loading and uploading layer weights: 7/48   Loading and uploading layer weights: 8/48   Loading and uploading layer weights: 9/48   Loading and uploading layer weights: 10/48   Loading and uploading layer weights: 11/48Error: "Uploading self_attn.o_proj.weight FP16 weights failed: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")"
