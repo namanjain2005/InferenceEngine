@@ -1,5 +1,6 @@
 use crate::config::ModelConfig;
 use crate::kernels::LinearOp;
+use crate::kernels::LinearWeights;
 use crate::kernels::ops::{AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
 use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
@@ -12,22 +13,23 @@ pub const DEFAULT_KV_CACHE_CAPACITY: usize = 2048;
 
 pub struct LayerWeights {
     input_layernorm: CudaSlice<f32>,
-    q_proj_weight: CudaSlice<f32>,
+    q_proj_weight: LinearWeights,
     q_proj_bias: CudaSlice<f32>,
-    k_proj_weight: CudaSlice<f32>,
+    k_proj_weight: LinearWeights,
     k_proj_bias: CudaSlice<f32>,
-    v_proj_weight: CudaSlice<f32>,
+    v_proj_weight: LinearWeights,
     v_proj_bias: CudaSlice<f32>,
-    o_proj_weight: CudaSlice<f32>,
+    o_proj_weight: LinearWeights,
     post_attention_layernorm: CudaSlice<f32>,
-    gate_proj_weight: CudaSlice<f32>,
-    up_proj_weight: CudaSlice<f32>,
-    down_proj_weight: CudaSlice<f32>,
+    gate_proj_weight: LinearWeights,
+    up_proj_weight: LinearWeights,
+    down_proj_weight: LinearWeights,
 }
 
 pub struct Qwen2Model {
     pub config: ModelConfig,
     embed_tokens: CudaSlice<f32>,
+    lm_head: Option<LinearWeights>,
     layers: Vec<LayerWeights>,
     norm: CudaSlice<f32>,
 }
@@ -96,13 +98,33 @@ pub struct KVCache {
     kv_dim: usize,
 }
 
+fn load_layer_f32(
+    st: &mut SafeTensors,
+    linear: &dyn LinearOp,
+    stream: &Arc<CudaStream>,
+    layer: usize,
+    name: &str,
+) -> Result<CudaSlice<f32>, String> {
+    let values = st.read_tensor_f32(&format!("model.layers.{layer}.{name}"))?;
+    linear.upload(stream, &values, name)
+}
+
+fn load_layer_projection(
+    st: &mut SafeTensors,
+    linear: &dyn LinearOp,
+    stream: &Arc<CudaStream>,
+    layer: usize,
+    name: &str,
+    rows: usize,
+    cols: usize,
+) -> Result<LinearWeights, String> {
+    let values = st.read_tensor_f32(&format!("model.layers.{layer}.{name}"))?;
+    linear.upload_weight(stream, &values, rows, cols, name)
+}
+
 impl KVCache {
     /// Allocate a cache using [`DEFAULT_KV_CACHE_CAPACITY`] positions.
-    pub fn new(
-        stream: &Arc<CudaStream>,
-        num_layers: usize,
-        kv_dim: usize,
-    ) -> Result<Self, String> {
+    pub fn new(stream: &Arc<CudaStream>, num_layers: usize, kv_dim: usize) -> Result<Self, String> {
         Self::with_capacity(stream, num_layers, DEFAULT_KV_CACHE_CAPACITY, kv_dim)
     }
 
@@ -224,6 +246,18 @@ impl Qwen2Model {
             &st.read_tensor_f32("model.norm.weight")?,
             "final norm weights",
         )?;
+        let lm_head = if config.tie_word_embeddings {
+            None
+        } else {
+            let values = st.read_tensor_f32("lm_head.weight")?;
+            Some(linear.upload_weight(
+                stream,
+                &values,
+                config.vocab_size,
+                config.hidden_size,
+                "lm_head.weight",
+            )?)
+        };
         let mut layers = Vec::with_capacity(config.num_hidden_layers);
         for l in 0..config.num_hidden_layers {
             print!(
@@ -233,29 +267,88 @@ impl Qwen2Model {
             );
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            let mut load = |name: &str| -> Result<CudaSlice<f32>, String> {
-                let values = st.read_tensor_f32(&format!("model.layers.{l}.{name}"))?;
-                linear.upload(stream, &values, name)
-            };
             layers.push(LayerWeights {
-                input_layernorm: load("input_layernorm.weight")?,
-                q_proj_weight: load("self_attn.q_proj.weight")?,
-                q_proj_bias: load("self_attn.q_proj.bias")?,
-                k_proj_weight: load("self_attn.k_proj.weight")?,
-                k_proj_bias: load("self_attn.k_proj.bias")?,
-                v_proj_weight: load("self_attn.v_proj.weight")?,
-                v_proj_bias: load("self_attn.v_proj.bias")?,
-                o_proj_weight: load("self_attn.o_proj.weight")?,
-                post_attention_layernorm: load("post_attention_layernorm.weight")?,
-                gate_proj_weight: load("mlp.gate_proj.weight")?,
-                up_proj_weight: load("mlp.up_proj.weight")?,
-                down_proj_weight: load("mlp.down_proj.weight")?,
+                input_layernorm: load_layer_f32(st, linear, stream, l, "input_layernorm.weight")?,
+                q_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "self_attn.q_proj.weight",
+                    config.num_attention_heads * config.head_dim(),
+                    config.hidden_size,
+                )?,
+                q_proj_bias: load_layer_f32(st, linear, stream, l, "self_attn.q_proj.bias")?,
+                k_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "self_attn.k_proj.weight",
+                    config.num_key_value_heads * config.head_dim(),
+                    config.hidden_size,
+                )?,
+                k_proj_bias: load_layer_f32(st, linear, stream, l, "self_attn.k_proj.bias")?,
+                v_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "self_attn.v_proj.weight",
+                    config.num_key_value_heads * config.head_dim(),
+                    config.hidden_size,
+                )?,
+                v_proj_bias: load_layer_f32(st, linear, stream, l, "self_attn.v_proj.bias")?,
+                o_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "self_attn.o_proj.weight",
+                    config.hidden_size,
+                    config.num_attention_heads * config.head_dim(),
+                )?,
+                post_attention_layernorm: load_layer_f32(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "post_attention_layernorm.weight",
+                )?,
+                gate_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "mlp.gate_proj.weight",
+                    config.intermediate_size,
+                    config.hidden_size,
+                )?,
+                up_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "mlp.up_proj.weight",
+                    config.intermediate_size,
+                    config.hidden_size,
+                )?,
+                down_proj_weight: load_layer_projection(
+                    st,
+                    linear,
+                    stream,
+                    l,
+                    "mlp.down_proj.weight",
+                    config.hidden_size,
+                    config.intermediate_size,
+                )?,
             });
         }
         println!("\n   All model weights are resident on the GPU.");
         Ok(Self {
             config,
             embed_tokens,
+            lm_head,
             layers,
             norm,
         })
@@ -295,7 +388,7 @@ impl Qwen2Model {
         for (l, layer) in self.layers.iter().enumerate() {
             let x_norm =
                 rmsnorm.forward(stream, &x, &layer.input_layernorm, self.config.rms_norm_eps)?;
-            let q = linear.gemv(
+            let q = linear.gemv_weight(
                 stream,
                 &x_norm,
                 &layer.q_proj_weight,
@@ -303,7 +396,7 @@ impl Qwen2Model {
                 hidden,
                 q_dim,
             )?;
-            let k = linear.gemv(
+            let k = linear.gemv_weight(
                 stream,
                 &x_norm,
                 &layer.k_proj_weight,
@@ -311,7 +404,7 @@ impl Qwen2Model {
                 hidden,
                 kv_dim,
             )?;
-            let v = linear.gemv(
+            let v = linear.gemv_weight(
                 stream,
                 &x_norm,
                 &layer.v_proj_weight,
@@ -349,14 +442,8 @@ impl Qwen2Model {
                 self.config.num_key_value_heads,
                 self.config.head_dim(),
             )?;
-            let attn_proj = linear.gemv(
-                stream,
-                &attn_out,
-                &layer.o_proj_weight,
-                None,
-                q_dim,
-                hidden,
-            )?;
+            let attn_proj =
+                linear.gemv_weight(stream, &attn_out, &layer.o_proj_weight, None, q_dim, hidden)?;
             x = vector.add(stream, &x, &attn_proj)?;
 
             let mlp_norm = rmsnorm.forward(
@@ -366,7 +453,7 @@ impl Qwen2Model {
                 self.config.rms_norm_eps,
             )?;
             let intermediate = self.config.intermediate_size;
-            let gate = linear.gemv(
+            let gate = linear.gemv_weight(
                 stream,
                 &mlp_norm,
                 &layer.gate_proj_weight,
@@ -374,7 +461,7 @@ impl Qwen2Model {
                 hidden,
                 intermediate,
             )?;
-            let up = linear.gemv(
+            let up = linear.gemv_weight(
                 stream,
                 &mlp_norm,
                 &layer.up_proj_weight,
@@ -383,7 +470,7 @@ impl Qwen2Model {
                 intermediate,
             )?;
             let act = swiglu.forward(stream, &gate, &up)?;
-            let mlp_out = linear.gemv(
+            let mlp_out = linear.gemv_weight(
                 stream,
                 &act,
                 &layer.down_proj_weight,
@@ -395,7 +482,6 @@ impl Qwen2Model {
         }
         Ok(x)
     }
-
 }
 
 impl ModelBackend for Qwen2Model {
@@ -437,16 +523,28 @@ impl ModelBackend for Qwen2Model {
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String> {
         let hidden = self.config.hidden_size;
-        let x = self.forward_core(token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
-        let final_norm = rmsnorm.forward(stream, &x, &self.norm, self.config.rms_norm_eps)?;
-        let logits = linear.gemv(
-            stream,
-            &final_norm,
-            &self.embed_tokens,
-            None,
-            hidden,
-            self.config.vocab_size,
+        let x = self.forward_core(
+            token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream,
         )?;
+        let final_norm = rmsnorm.forward(stream, &x, &self.norm, self.config.rms_norm_eps)?;
+        let logits = match &self.lm_head {
+            Some(weight) => linear.gemv_weight(
+                stream,
+                &final_norm,
+                weight,
+                None,
+                hidden,
+                self.config.vocab_size,
+            )?,
+            None => linear.gemv(
+                stream,
+                &final_norm,
+                &self.embed_tokens,
+                None,
+                hidden,
+                self.config.vocab_size,
+            )?,
+        };
         Ok(logits)
     }
 
@@ -462,7 +560,9 @@ impl ModelBackend for Qwen2Model {
         vector: &VectorKernels,
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String> {
-        self.forward_core(token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)
+        self.forward_core(
+            token_id, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream,
+        )
     }
 
     fn forward_prefill(
@@ -490,7 +590,9 @@ impl ModelBackend for Qwen2Model {
         cache.ensure_capacity(stream, end_pos, start_pos)?;
         // Single trailing token: identical to the decode path, no batching win.
         if batch == 1 {
-            return self.forward_token(tokens[0], start_pos, cache, linear, rmsnorm, swiglu, attention, vector, stream);
+            return self.forward_token(
+                tokens[0], start_pos, cache, linear, rmsnorm, swiglu, attention, vector, stream,
+            );
         }
         let hidden = self.config.hidden_size;
         let q_dim = self
@@ -506,21 +608,55 @@ impl ModelBackend for Qwen2Model {
         let intermediate = self.config.intermediate_size;
 
         // Batched linear helper: same weights, GEMM or batched-GEMV baseline.
-        let lin = |stream: &Arc<CudaStream>, input: &CudaSlice<f32>, weights: &CudaSlice<f32>, bias: Option<&CudaSlice<f32>>, in_f: usize, out_f: usize| -> Result<CudaSlice<f32>, String> {
+        let lin = |stream: &Arc<CudaStream>,
+                   input: &CudaSlice<f32>,
+                   weights: &LinearWeights,
+                   bias: Option<&CudaSlice<f32>>,
+                   in_f: usize,
+                   out_f: usize|
+         -> Result<CudaSlice<f32>, String> {
             if use_gemm {
-                linear.gemm(stream, input, weights, bias, batch, in_f, out_f)
+                linear.gemm_weight(stream, input, weights, bias, batch, in_f, out_f)
             } else {
-                linear.gemv_batched(stream, input, weights, bias, batch, in_f, out_f)
+                linear.gemv_batched_weight(stream, input, weights, bias, batch, in_f, out_f)
             }
         };
 
         let mut x = vector.embedding_batch(stream, &self.embed_tokens, tokens, hidden)?;
 
         for (l, layer) in self.layers.iter().enumerate() {
-            let x_norm = rmsnorm.forward_batch(stream, &x, &layer.input_layernorm, batch, hidden, self.config.rms_norm_eps)?;
-            let q = lin(stream, &x_norm, &layer.q_proj_weight, Some(&layer.q_proj_bias), hidden, q_dim)?;
-            let k = lin(stream, &x_norm, &layer.k_proj_weight, Some(&layer.k_proj_bias), hidden, kv_dim)?;
-            let v = lin(stream, &x_norm, &layer.v_proj_weight, Some(&layer.v_proj_bias), hidden, kv_dim)?;
+            let x_norm = rmsnorm.forward_batch(
+                stream,
+                &x,
+                &layer.input_layernorm,
+                batch,
+                hidden,
+                self.config.rms_norm_eps,
+            )?;
+            let q = lin(
+                stream,
+                &x_norm,
+                &layer.q_proj_weight,
+                Some(&layer.q_proj_bias),
+                hidden,
+                q_dim,
+            )?;
+            let k = lin(
+                stream,
+                &x_norm,
+                &layer.k_proj_weight,
+                Some(&layer.k_proj_bias),
+                hidden,
+                kv_dim,
+            )?;
+            let v = lin(
+                stream,
+                &x_norm,
+                &layer.v_proj_weight,
+                Some(&layer.v_proj_bias),
+                hidden,
+                kv_dim,
+            )?;
             let (q, k) = vector.rope_batch(
                 stream,
                 &q,
@@ -533,7 +669,16 @@ impl ModelBackend for Qwen2Model {
                 self.config.rope_theta,
             )?;
             let layer_cache = &mut cache.layers[l];
-            vector.append_cache_batch(stream, &k, &v, &mut layer_cache.k, &mut layer_cache.v, start_pos, batch, kv_dim)?;
+            vector.append_cache_batch(
+                stream,
+                &k,
+                &v,
+                &mut layer_cache.k,
+                &mut layer_cache.v,
+                start_pos,
+                batch,
+                kv_dim,
+            )?;
             let attn_out = attention.forward_prefill(
                 stream,
                 &q,
@@ -548,18 +693,65 @@ impl ModelBackend for Qwen2Model {
             let attn_proj = lin(stream, &attn_out, &layer.o_proj_weight, None, q_dim, hidden)?;
             x = vector.add(stream, &x, &attn_proj)?;
 
-            let mlp_norm = rmsnorm.forward_batch(stream, &x, &layer.post_attention_layernorm, batch, hidden, self.config.rms_norm_eps)?;
-            let gate = lin(stream, &mlp_norm, &layer.gate_proj_weight, None, hidden, intermediate)?;
-            let up = lin(stream, &mlp_norm, &layer.up_proj_weight, None, hidden, intermediate)?;
+            let mlp_norm = rmsnorm.forward_batch(
+                stream,
+                &x,
+                &layer.post_attention_layernorm,
+                batch,
+                hidden,
+                self.config.rms_norm_eps,
+            )?;
+            let gate = lin(
+                stream,
+                &mlp_norm,
+                &layer.gate_proj_weight,
+                None,
+                hidden,
+                intermediate,
+            )?;
+            let up = lin(
+                stream,
+                &mlp_norm,
+                &layer.up_proj_weight,
+                None,
+                hidden,
+                intermediate,
+            )?;
             let act = swiglu.forward(stream, &gate, &up)?;
-            let mlp_out = lin(stream, &act, &layer.down_proj_weight, None, intermediate, hidden)?;
+            let mlp_out = lin(
+                stream,
+                &act,
+                &layer.down_proj_weight,
+                None,
+                intermediate,
+                hidden,
+            )?;
             x = vector.add(stream, &x, &mlp_out)?;
         }
         // Logits for the last prompt token only: avoids a [batch, vocab]
         // temporary (batch * 151936 floats) and matches forward_token output.
-        let final_norm = rmsnorm.forward_batch(stream, &x, &self.norm, batch, hidden, self.config.rms_norm_eps)?;
+        let final_norm = rmsnorm.forward_batch(
+            stream,
+            &x,
+            &self.norm,
+            batch,
+            hidden,
+            self.config.rms_norm_eps,
+        )?;
         let last = vector.gather_row(stream, &final_norm, batch - 1, batch, hidden)?;
-        let logits = linear.gemv(stream, &last, &self.embed_tokens, None, hidden, self.config.vocab_size)?;
+        let logits = match &self.lm_head {
+            Some(weight) => {
+                linear.gemv_weight(stream, &last, weight, None, hidden, self.config.vocab_size)?
+            }
+            None => linear.gemv(
+                stream,
+                &last,
+                &self.embed_tokens,
+                None,
+                hidden,
+                self.config.vocab_size,
+            )?,
+        };
         Ok(logits)
     }
 }
@@ -611,6 +803,9 @@ pub fn validate_qwen2_checkpoint(
         "model.embed_tokens.weight".into(),
         &[config.vocab_size, hidden],
     )?;
+    if !config.tie_word_embeddings {
+        check("lm_head.weight".into(), &[config.vocab_size, hidden])?;
+    }
     check("model.norm.weight".into(), &[hidden])?;
     for layer in 0..config.num_hidden_layers {
         let p = format!("model.layers.{layer}");

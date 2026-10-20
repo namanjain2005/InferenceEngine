@@ -15,10 +15,16 @@ pub struct ModelConfig {
     pub rms_norm_eps: f32,
     pub rope_theta: f32,
     pub vocab_size: usize,
+    #[serde(default = "default_tie_word_embeddings")]
+    pub tie_word_embeddings: bool,
     #[serde(default)]
     pub bos_token_id: usize,
     #[serde(default)]
     pub eos_token_id: usize,
+}
+
+fn default_tie_word_embeddings() -> bool {
+    true
 }
 
 impl ModelConfig {

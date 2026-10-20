@@ -1,0 +1,100 @@
+model,weight_format,prompt_number,prompt,input_tokens,custom_prefill,custom_generated_tokens,custom_decode,cublas_prefill,cublas_generated_tokens,cublas_decode,identical_tokens,max_abs_prefill_logit_diff,custom_nonfinite,cublas_nonfinite
+1.5B,f32,1,Tiny context,33,103.04ms,13,169.50ms,22.13ms,13,140.41ms,13/13,1.029e-4,0,0
+1.5B,f32,2,Short context,45,103.69ms,16,196.85ms,22.59ms,16,162.39ms,16/16,1.020e-4,0,0
+1.5B,f32,3,Medium context,154,146.49ms,16,202.13ms,52.31ms,16,167.85ms,16/16,6.151e-5,0,0
+1.5B,f32,4,Long context,321,251.88ms,16,210.61ms,96.17ms,16,177.70ms,16/16,6.104e-5,0,0
+1.5B,f32,5,Long context with repeated structure,282,210.55ms,16,207.70ms,83.88ms,16,174.92ms,16/16,5.245e-5,0,0
+1.5B,f32,6,Multi-step arithmetic,56,104.25ms,16,197.30ms,22.75ms,16,166.26ms,16/16,5.722e-5,0,0
+1.5B,f32,7,Compare totals,73,114.74ms,16,197.44ms,31.36ms,16,164.06ms,16/16,8.821e-5,0,0
+1.5B,f32,8,Exact format,73,114.62ms,16,198.13ms,31.34ms,16,164.90ms,16/16,9.727e-5,0,0
+1.5B,f32,9,Time extraction,78,114.87ms,16,197.94ms,31.83ms,16,164.52ms,16/16,1.030e-4,0,0
+1.5B,fp16,1,Tiny context,33,106.00ms,13,231.86ms,13.93ms,13,118.96ms,13/13,9.012e-3,0,0
+1.5B,fp16,2,Short context,45,107.96ms,16,268.55ms,13.55ms,16,138.88ms,16/16,8.146e-3,0,0
+1.5B,fp16,3,Medium context,154,154.46ms,16,273.94ms,24.21ms,16,145.47ms,16/16,1.386e-2,0,0
+1.5B,fp16,4,Long context,321,252.87ms,16,282.47ms,36.49ms,16,151.59ms,16/16,8.789e-3,0,0
+1.5B,fp16,5,Long context with repeated structure,282,224.67ms,16,280.40ms,34.16ms,16,150.35ms,16/16,9.294e-3,0,0
+1.5B,fp16,6,Multi-step arithmetic,56,108.67ms,16,269.10ms,14.10ms,16,143.61ms,16/16,7.067e-3,0,0
+1.5B,fp16,7,Compare totals,73,118.49ms,16,269.34ms,17.35ms,16,145.70ms,16/16,1.175e-2,0,0
+1.5B,fp16,8,Exact format,73,118.36ms,16,269.42ms,17.10ms,16,162.49ms,16/16,1.389e-2,0,0
+1.5B,fp16,9,Time extraction,78,118.71ms,16,270.80ms,17.47ms,16,146.88ms,16/16,7.511e-3,0,0
+1.5B,int8,1,Tiny context,33,102.31ms,13,121.40ms,39.99ms,13,372.58ms,13/13,7.010e-5,0,0
+1.5B,int8,2,Short context,45,100.33ms,16,140.57ms,40.94ms,16,429.15ms,16/16,5.817e-5,0,0
+1.5B,int8,3,Medium context,154,137.86ms,16,146.39ms,70.52ms,16,433.37ms,16/16,4.387e-5,0,0
+1.5B,int8,4,Long context,321,243.80ms,16,153.85ms,111.55ms,16,442.43ms,16/16,4.792e-5,0,0
+1.5B,int8,5,Long context with repeated structure,282,218.10ms,16,152.32ms,102.01ms,16,440.40ms,16/16,9.418e-5,0,0
+1.5B,int8,6,Multi-step arithmetic,56,102.14ms,16,142.06ms,41.20ms,16,428.54ms,16/16,1.087e-4,0,0
+1.5B,int8,7,Compare totals,73,111.16ms,16,142.50ms,49.53ms,16,429.81ms,16/16,5.984e-5,0,0
+1.5B,int8,8,Exact format,73,111.56ms,16,142.29ms,50.04ms,16,430.18ms,16/16,1.109e-4,0,0
+1.5B,int8,9,Time extraction,78,111.59ms,16,142.24ms,50.80ms,16,430.52ms,16/16,8.833e-5,0,0
+14B,fp16,1,Tiny context,33,528.77ms,13,1.47s,79.61ms,13,634.09ms,13/13,1.012e-2,0,0
+14B,fp16,2,Short context,45,540.05ms,16,1.70s,83.48ms,16,731.39ms,16/16,2.271e-2,0,0
+14B,fp16,3,Medium context,154,1.17s,16,1.71s,154.17ms,16,741.26ms,16/16,1.431e-2,0,0
+14B,fp16,4,Long context,321,2.15s,16,1.72s,225.92ms,16,754.32ms,16/16,8.244e-3,0,0
+14B,fp16,5,Long context with repeated structure,282,2.02s,16,1.72s,206.82ms,16,751.57ms,16/16,1.356e-2,0,0
+14B,fp16,6,Multi-step arithmetic,56,544.91ms,16,1.70s,85.03ms,16,733.29ms,16/16,1.783e-2,0,0
+14B,fp16,7,Compare totals,73,843.51ms,16,1.70s,122.30ms,16,733.10ms,16/16,1.493e-2,0,0
+14B,fp16,8,Exact format,73,843.24ms,16,1.70s,120.38ms,16,733.99ms,16/16,1.452e-2,0,0
+14B,fp16,9,Time extraction,78,847.20ms,14,1.59s,121.57ms,14,685.84ms,14/14,1.714e-2,0,0
+14B,int8,1,Tiny context,33,487.91ms,13,581.02ms,351.43ms,13,3.16s,13/13,8.345e-5,0,0
+14B,int8,2,Short context,45,503.67ms,16,688.93ms,365.30ms,16,3.65s,16/16,8.011e-5,0,0
+14B,int8,3,Medium context,154,1.10s,16,697.73ms,679.68ms,16,3.66s,16/16,1.297e-4,0,0
+14B,int8,4,Long context,321,2.07s,16,711.96ms,946.16ms,16,3.67s,16/16,7.439e-5,0,0
+14B,int8,5,Long context with repeated structure,282,1.93s,16,708.51ms,923.46ms,16,3.66s,16/16,1.202e-4,0,0
+14B,int8,6,Multi-step arithmetic,56,509.44ms,16,689.58ms,352.42ms,16,3.65s,16/16,1.154e-4,0,0
+14B,int8,7,Compare totals,73,763.48ms,16,691.58ms,420.70ms,16,3.65s,16/16,8.249e-5,0,0
+14B,int8,8,Exact format,73,764.94ms,16,691.55ms,419.17ms,16,3.65s,16/16,1.137e-4,0,0
+14B,int8,9,Time extraction,78,765.73ms,14,647.28ms,421.63ms,14,3.41s,14/14,1.488e-4,0,0
+3B,f32,1,Tiny context,33,181.69ms,11,251.49ms,41.19ms,11,210.88ms,11/11,1.110e-3,0,0
+3B,f32,2,Short context,45,184.04ms,16,344.25ms,41.95ms,16,288.18ms,16/16,1.064e-3,0,0
+3B,f32,3,Medium context,154,263.65ms,16,351.30ms,88.07ms,16,295.03ms,16/16,5.317e-4,0,0
+3B,f32,4,Long context,321,481.81ms,16,361.60ms,179.34ms,16,307.43ms,16/16,7.305e-4,0,0
+3B,f32,5,Long context with repeated structure,282,400.49ms,16,359.46ms,149.73ms,16,303.44ms,16/16,6.661e-4,0,0
+3B,f32,6,Multi-step arithmetic,56,185.65ms,16,345.10ms,42.53ms,16,288.97ms,16/16,1.013e-3,0,0
+3B,f32,7,Compare totals,73,203.42ms,16,346.09ms,58.22ms,16,289.65ms,16/16,2.480e-3,0,0
+3B,f32,8,Exact format,73,203.41ms,16,346.51ms,57.92ms,16,290.38ms,16/16,1.834e-3,0,0
+3B,f32,9,Time extraction,78,203.81ms,16,346.31ms,58.70ms,16,291.69ms,16/16,5.541e-4,0,0
+3B,fp16,1,Tiny context,33,187.58ms,11,335.33ms,22.71ms,11,159.66ms,11/11,1.225e-2,0,0
+3B,fp16,2,Short context,45,192.05ms,16,458.29ms,22.51ms,16,217.65ms,16/16,1.793e-2,0,0
+3B,fp16,3,Medium context,154,254.89ms,16,465.72ms,39.88ms,16,225.20ms,16/16,1.170e-2,0,0
+3B,fp16,4,Long context,321,486.10ms,16,476.64ms,58.14ms,16,236.05ms,16/16,9.747e-3,0,0
+3B,fp16,5,Long context with repeated structure,282,409.35ms,16,473.85ms,55.68ms,16,233.44ms,16/16,1.373e-2,0,0
+3B,fp16,6,Multi-step arithmetic,56,193.63ms,16,459.10ms,23.13ms,16,219.29ms,16/16,1.568e-2,0,0
+3B,fp16,7,Compare totals,73,223.12ms,16,460.20ms,29.50ms,16,220.19ms,16/16,1.305e-2,0,0
+3B,fp16,8,Exact format,73,223.80ms,16,458.84ms,29.35ms,16,219.51ms,16/16,3.186e-2,0,0
+3B,fp16,9,Time extraction,78,223.16ms,16,460.44ms,29.65ms,16,221.82ms,16/16,1.268e-2,0,0
+3B,int8,1,Tiny context,33,179.32ms,11,171.44ms,78.07ms,11,612.40ms,11/11,2.209e-3,0,0
+3B,int8,2,Short context,45,181.00ms,16,234.80ms,78.74ms,16,837.97ms,16/16,1.813e-3,0,0
+3B,int8,3,Medium context,154,244.53ms,16,240.99ms,125.58ms,16,839.62ms,16/16,6.151e-4,0,0
+3B,int8,4,Long context,321,483.61ms,16,251.81ms,216.54ms,16,849.35ms,16/16,6.242e-4,0,0
+3B,int8,5,Long context with repeated structure,282,401.84ms,16,249.13ms,186.74ms,16,844.44ms,16/16,1.001e-3,0,0
+3B,int8,6,Multi-step arithmetic,56,181.96ms,16,235.04ms,79.50ms,16,830.09ms,16/16,2.137e-3,0,0
+3B,int8,7,Compare totals,73,209.52ms,16,237.03ms,93.65ms,16,835.09ms,16/16,4.458e-3,0,0
+3B,int8,8,Exact format,73,207.92ms,16,235.99ms,93.89ms,16,834.77ms,16/16,2.206e-3,0,0
+3B,int8,9,Time extraction,78,209.40ms,16,237.66ms,95.29ms,16,832.67ms,16/16,6.738e-4,0,0
+7B,f32,1,Tiny context,33,283.67ms,9,388.40ms,84.50ms,9,341.52ms,9/9,8.774e-5,0,0
+7B,f32,2,Short context,45,283.26ms,16,648.19ms,85.23ms,16,569.78ms,16/16,7.915e-5,0,0
+7B,f32,3,Medium context,154,549.58ms,16,653.69ms,248.71ms,16,575.58ms,16/16,6.533e-5,0,0
+7B,f32,4,Long context,321,1.05s,16,662.03ms,403.34ms,16,584.24ms,16/16,2.222e-4,0,0
+7B,f32,5,Long context with repeated structure,282,958.67ms,16,660.53ms,368.16ms,16,583.15ms,16/16,1.450e-4,0,0
+7B,f32,6,Multi-step arithmetic,56,285.58ms,16,649.57ms,86.50ms,16,570.69ms,16/16,1.278e-4,0,0
+7B,f32,7,Compare totals,73,451.88ms,16,649.73ms,126.00ms,16,571.74ms,16/16,7.725e-5,0,0
+7B,f32,8,Exact format,73,451.77ms,16,649.66ms,125.98ms,16,571.27ms,16/16,8.583e-5,0,0
+7B,f32,9,Time extraction,78,452.38ms,16,649.84ms,126.41ms,16,571.57ms,16/16,1.161e-4,0,0
+7B,fp16,1,Tiny context,33,310.06ms,9,504.97ms,38.13ms,9,231.28ms,9/9,1.005e-2,0,0
+7B,fp16,2,Short context,45,325.46ms,16,841.92ms,39.32ms,16,386.28ms,16/16,9.233e-3,0,0
+7B,fp16,3,Medium context,154,546.47ms,16,848.64ms,79.10ms,16,390.81ms,16/16,1.085e-2,0,0
+7B,fp16,4,Long context,321,1.11s,16,856.44ms,105.63ms,16,400.22ms,16/16,8.895e-3,0,0
+7B,fp16,5,Long context with repeated structure,282,969.26ms,16,854.34ms,100.64ms,16,399.59ms,16/16,8.425e-3,0,0
+7B,fp16,6,Multi-step arithmetic,56,326.47ms,16,843.24ms,40.31ms,16,386.98ms,16/16,1.926e-2,0,0
+7B,fp16,7,Compare totals,73,414.71ms,16,843.97ms,55.34ms,16,388.13ms,16/16,1.248e-2,0,0
+7B,fp16,8,Exact format,73,414.90ms,16,843.66ms,59.39ms,16,387.60ms,16/16,1.847e-2,0,0
+7B,fp16,9,Time extraction,78,415.52ms,16,844.31ms,55.89ms,16,389.32ms,16/16,1.138e-2,0,0
+7B,int8,1,Tiny context,33,295.52ms,9,210.67ms,183.18ms,9,1.12s,9/9,8.011e-5,0,0
+7B,int8,2,Short context,45,310.18ms,16,362.59ms,183.17ms,16,1.87s,16/16,8.249e-5,0,0
+7B,int8,3,Medium context,154,533.08ms,16,368.74ms,348.35ms,16,1.88s,16/16,9.191e-5,0,0
+7B,int8,4,Long context,321,1.12s,16,375.35ms,504.36ms,16,1.89s,16/16,8.726e-5,0,0
+7B,int8,5,Long context with repeated structure,282,950.00ms,16,375.18ms,472.06ms,16,1.89s,16/16,2.232e-4,0,0
+7B,int8,6,Multi-step arithmetic,56,311.24ms,16,363.85ms,187.05ms,16,1.88s,16/16,1.984e-4,0,0
+7B,int8,7,Compare totals,73,407.24ms,16,365.30ms,233.06ms,16,1.88s,16/16,1.311e-4,0,0
+7B,int8,8,Exact format,73,406.08ms,16,365.11ms,227.57ms,16,1.87s,16/16,1.450e-4,0,0
+7B,int8,9,Time extraction,78,413.46ms,16,363.61ms,223.75ms,16,1.88s,16/16,8.440e-5,0,0

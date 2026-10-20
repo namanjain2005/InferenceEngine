@@ -10,8 +10,8 @@ use cudarc::driver::{CudaSlice, CudaStream};
 use gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi, select_gpu};
 use kernels::cublas_linear::CublasLinear;
 use kernels::linear::LinearKernel;
-use kernels::LinearOp;
 use kernels::ops::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
+use kernels::{LinearOp, WeightFormat};
 use model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
 use safetensors::SafeTensors;
 use std::path::PathBuf;
@@ -71,6 +71,10 @@ struct Args {
     /// (hand-rolled GEMV/GEMM kernels only), or `cublas` (sgemm only).
     #[arg(long, default_value = "both")]
     linear: String,
+
+    /// Resident projection weight format: f32, f16, or symmetric row-wise int8.
+    #[arg(long, default_value = "f32")]
+    weight_format: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,8 +118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Checking available GPUs via nvidia-smi...");
         let gpus = query_nvidia_smi().map_err(|e| format!("Failed to query GPUs: {}", e))?;
-        let selected = select_gpu(None, &gpus)
-            .map_err(|e| format!("GPU selection error: {}", e))?;
+        let selected =
+            select_gpu(None, &gpus).map_err(|e| format!("GPU selection error: {}", e))?;
         print_gpu_table(&gpus, selected);
         selected
     };
@@ -123,11 +127,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Initialize CUDA device
     println!("[2/5] Initializing CUDA Context on GPU {}...", selected_gpu);
     let (cuda_ctx, cuda_stream) = init_cuda_device(selected_gpu)?;
-    let linear_custom = LinearKernel::new(&cuda_ctx)?;
-    let linear_cublas = CublasLinear::new(&cuda_ctx, cuda_stream.clone())?;
+    let weight_format = match args.weight_format.to_lowercase().as_str() {
+        "f32" | "fp32" => WeightFormat::F32,
+        "f16" | "fp16" => WeightFormat::F16,
+        "i8" | "int8" => WeightFormat::I8,
+        other => {
+            return Err(
+                format!("Unknown --weight-format '{other}': expected f32, f16, or int8").into(),
+            );
+        }
+    };
+    let linear_custom = LinearKernel::new_with_format(&cuda_ctx, weight_format)?;
+    let linear_cublas =
+        CublasLinear::new_with_format(&cuda_ctx, cuda_stream.clone(), weight_format)?;
     let backend = args.linear.to_lowercase();
     if !["custom", "cublas", "both"].contains(&backend.as_str()) {
-        return Err(format!("Unknown --linear '{}': expected custom, cublas, or both", args.linear).into());
+        return Err(format!(
+            "Unknown --linear '{}': expected custom, cublas, or both",
+            args.linear
+        )
+        .into());
     }
     // Default `both`: run the custom kernels and cuBLAS on the same input and
     // compare outputs + timings on every prompt, so the hand-rolled path is
@@ -140,7 +159,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!(
         "   -> Linear backend(s): {}",
-        backends.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+        backends
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "   -> Projection weight format: {:?} (FP32 activations and accumulation)",
+        weight_format
     );
     let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
@@ -184,14 +211,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut st = SafeTensors::open_model_dir(&args.model_dir)?;
     let (parameter_count, checkpoint_bytes) = validate_qwen2_checkpoint(&config, &st)?;
+    let projection_elements = projection_weight_elements(&config);
+    let non_projection_elements = (parameter_count as u128).saturating_sub(projection_elements);
+    let bytes_per_projection_weight = match weight_format {
+        WeightFormat::F32 => 4u128,
+        WeightFormat::F16 => 2,
+        WeightFormat::I8 => 1,
+    };
+    let scale_rows = if weight_format == WeightFormat::I8 {
+        config.num_hidden_layers as u128
+            * (config.num_attention_heads as u128 * config.head_dim() as u128
+                + 2 * config.num_key_value_heads as u128 * config.head_dim() as u128
+                + 2 * config.hidden_size as u128
+                + 2 * config.intermediate_size as u128)
+            + if config.tie_word_embeddings {
+                0
+            } else {
+                config.vocab_size as u128
+            }
+    } else {
+        0
+    };
+    let resident_weight_bytes = projection_elements * bytes_per_projection_weight
+        + non_projection_elements * 4
+        + scale_rows * 4;
     println!(
         "   -> Safetensors opened: {} tensors in header.",
         st.tensor_count()
     );
     println!(
-        "   -> Validated {parameter_count} parameters ({:.2} GiB source weights; {:.2} GiB as f32 on GPU).",
+        "   -> Validated {parameter_count} parameters ({:.2} GiB source weights; {:.2} GiB estimated resident weights as {:?}).",
         checkpoint_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-        parameter_count as f64 * 4.0 / (1024.0 * 1024.0 * 1024.0)
+        resident_weight_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        weight_format
     );
 
     let start_load = std::time::Instant::now();
@@ -209,18 +261,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Token loop warmup (last-logits form, same as the timed baseline).
             for (pos, &tok) in tiny.iter().enumerate() {
                 if pos + 1 < tiny.len() {
-                    model.forward_token_hidden(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                    model.forward_token_hidden(
+                        tok,
+                        pos,
+                        &mut cache,
+                        linear,
+                        &rmsnorm,
+                        &swiglu,
+                        &attention,
+                        &vector,
+                        &cuda_stream,
+                    )?;
                 } else {
-                    model.forward_token(tok, pos, &mut cache, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream)?;
+                    model.forward_token(
+                        tok,
+                        pos,
+                        &mut cache,
+                        linear,
+                        &rmsnorm,
+                        &swiglu,
+                        &attention,
+                        &vector,
+                        &cuda_stream,
+                    )?;
                 }
             }
             let mut cache_b = model.new_cache(&cuda_stream)?;
-            let _ = model.forward_prefill(&tiny, 0, &mut cache_b, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, false)?;
+            let _ = model.forward_prefill(
+                &tiny,
+                0,
+                &mut cache_b,
+                linear,
+                &rmsnorm,
+                &swiglu,
+                &attention,
+                &vector,
+                &cuda_stream,
+                false,
+            )?;
             let mut cache_g = model.new_cache(&cuda_stream)?;
-            let _ = model.forward_prefill(&tiny, 0, &mut cache_g, linear, &rmsnorm, &swiglu, &attention, &vector, &cuda_stream, true)?;
+            let _ = model.forward_prefill(
+                &tiny,
+                0,
+                &mut cache_g,
+                linear,
+                &rmsnorm,
+                &swiglu,
+                &attention,
+                &vector,
+                &cuda_stream,
+                true,
+            )?;
             println!("   -> Warmup done for backend {name}.");
         }
-        cuda_stream.synchronize().map_err(|e| format!("Warmup synchronize failed: {e}"))?;
+        cuda_stream
+            .synchronize()
+            .map_err(|e| format!("Warmup synchronize failed: {e}"))?;
     }
 
     // 5. Run the full built-in suite unless a one-off prompt was supplied.
@@ -235,10 +331,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n[5/5] Running {} prompt(s)...", prompts.len());
     let prefill = args.prefill.to_lowercase();
     if !["gemv-loop", "batched-gemv", "gemm"].contains(&prefill.as_str()) {
-        return Err(format!("Unknown --prefill '{}': expected gemv-loop, batched-gemv, or gemm", args.prefill).into());
+        return Err(format!(
+            "Unknown --prefill '{}': expected gemv-loop, batched-gemv, or gemm",
+            args.prefill
+        )
+        .into());
     }
     for (index, (label, prompt)) in prompts.iter().enumerate() {
-        println!("\n--- Prompt {}/{}: {} ---", index + 1, prompts.len(), label);
+        println!(
+            "\n--- Prompt {}/{}: {} ---",
+            index + 1,
+            prompts.len(),
+            label
+        );
         let host_tokens = tokenize_prompt(&tokenizer, prompt)?;
         println!("Input prompt:\n{prompt}");
         println!(
@@ -377,21 +482,44 @@ fn run_backend<M: ModelBackend>(
             let mut last = None;
             for (pos, &tok) in host_tokens.iter().enumerate() {
                 if pos + 1 < host_tokens.len() {
-                    model.forward_token_hidden(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?;
+                    model.forward_token_hidden(
+                        tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream,
+                    )?;
                 } else {
-                    last = Some(model.forward_token(tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream)?);
+                    last = Some(model.forward_token(
+                        tok, pos, cache, linear, rmsnorm, swiglu, attention, vector, stream,
+                    )?);
                 }
             }
-            stream.synchronize().map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
-            Ok((last.ok_or("Prompt prefill produced no logits")?, start.elapsed()))
+            stream
+                .synchronize()
+                .map_err(|e| format!("Prefill loop synchronize failed: {e}"))?;
+            Ok((
+                last.ok_or("Prompt prefill produced no logits")?,
+                start.elapsed(),
+            ))
         };
-    let prefill_batched =
-        |cache: &mut M::Cache, use_gemm: bool| -> Result<(CudaSlice<f32>, std::time::Duration), String> {
-            let start = std::time::Instant::now();
-            let logits = model.forward_prefill(host_tokens, 0, cache, linear, rmsnorm, swiglu, attention, vector, stream, use_gemm)?;
-            stream.synchronize().map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
-            Ok((logits, start.elapsed()))
-        };
+    let prefill_batched = |cache: &mut M::Cache,
+                           use_gemm: bool|
+     -> Result<(CudaSlice<f32>, std::time::Duration), String> {
+        let start = std::time::Instant::now();
+        let logits = model.forward_prefill(
+            host_tokens,
+            0,
+            cache,
+            linear,
+            rmsnorm,
+            swiglu,
+            attention,
+            vector,
+            stream,
+            use_gemm,
+        )?;
+        stream
+            .synchronize()
+            .map_err(|e| format!("Prefill batched synchronize failed: {e}"))?;
+        Ok((logits, start.elapsed()))
+    };
     let median_of = |mut dts: Vec<std::time::Duration>| -> std::time::Duration {
         dts.sort();
         dts[dts.len() / 2]
@@ -419,11 +547,20 @@ fn run_backend<M: ModelBackend>(
             bgemv_dts.push(prefill_batched(&mut cache_bgemv, false)?.1);
             gemm_dts.push(prefill_batched(&mut cache_gemm, true)?.1);
         }
-        let (dt_loop, dt_bgemv, dt_gemm) =
-            (median_of(loop_dts), median_of(bgemv_dts), median_of(gemm_dts));
-        let host_loop = stream.clone_dtoh(&logits_loop).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
-        let host_bgemv = stream.clone_dtoh(&logits_bgemv).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
-        let host_gemm = stream.clone_dtoh(&logits_gemm).map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let (dt_loop, dt_bgemv, dt_gemm) = (
+            median_of(loop_dts),
+            median_of(bgemv_dts),
+            median_of(gemm_dts),
+        );
+        let host_loop = stream
+            .clone_dtoh(&logits_loop)
+            .map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let host_bgemv = stream
+            .clone_dtoh(&logits_bgemv)
+            .map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
+        let host_gemm = stream
+            .clone_dtoh(&logits_gemm)
+            .map_err(|e| format!("Prefill benchmark D2H failed: {e}"))?;
         println!(
             "[{backend}] Prefill benchmark ({} tokens): gemv-loop {:.2?} | batched-gemv {:.2?} ({:.2}x) diff {:.2e} | gemm {:.2?} ({:.2}x) diff {:.2e}",
             host_tokens.len(),
@@ -459,17 +596,27 @@ fn run_backend<M: ModelBackend>(
             "gemv-loop" => {
                 let start = std::time::Instant::now();
                 let (logits, _) = prefill_loop(&mut cache)?;
-                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
-                (start.elapsed(), select_token(argmax, stream, &logits)?, host)
+                let host = stream
+                    .clone_dtoh(&logits)
+                    .map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                (
+                    start.elapsed(),
+                    select_token(argmax, stream, &logits)?,
+                    host,
+                )
             }
             "batched-gemv" => {
                 let (logits, dt) = prefill_batched(&mut cache, false)?;
-                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                let host = stream
+                    .clone_dtoh(&logits)
+                    .map_err(|e| format!("Prefill D2H failed: {e}"))?;
                 (dt, select_token(argmax, stream, &logits)?, host)
             }
             _ => {
                 let (logits, dt) = prefill_batched(&mut cache, true)?;
-                let host = stream.clone_dtoh(&logits).map_err(|e| format!("Prefill D2H failed: {e}"))?;
+                let host = stream
+                    .clone_dtoh(&logits)
+                    .map_err(|e| format!("Prefill D2H failed: {e}"))?;
                 (dt, select_token(argmax, stream, &logits)?, host)
             }
         }
@@ -662,7 +809,12 @@ fn print_backend_comparison(outcomes: &[PromptOutcome]) {
             base.prefill_time,
             other.name,
             other.prefill_time,
-            speedup_phrase(base.prefill_time, other.prefill_time, &base.name, &other.name)
+            speedup_phrase(
+                base.prefill_time,
+                other.prefill_time,
+                &base.name,
+                &other.name
+            )
         );
         println!(
             "  decode:  {} {:.2?} | {} {:.2?}  ->  {}",
@@ -686,6 +838,24 @@ fn print_backend_comparison(outcomes: &[PromptOutcome]) {
             )
         );
     }
+}
+
+fn projection_weight_elements(config: &ModelConfig) -> u128 {
+    let hidden = config.hidden_size as u128;
+    let q = config.num_attention_heads as u128 * config.head_dim() as u128;
+    let kv = config.num_key_value_heads as u128 * config.head_dim() as u128;
+    let intermediate = config.intermediate_size as u128;
+    config.num_hidden_layers as u128
+        * (q * hidden
+            + 2 * kv * hidden
+            + hidden * q
+            + 2 * intermediate * hidden
+            + hidden * intermediate)
+        + if config.tie_word_embeddings {
+            0
+        } else {
+            config.vocab_size as u128 * hidden
+        }
 }
 
 fn select_token(

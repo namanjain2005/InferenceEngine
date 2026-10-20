@@ -1,3 +1,20 @@
+__device__ __forceinline__ float half_bits_to_float(unsigned short h) {
+    const unsigned int sign = ((unsigned int)h & 0x8000u) << 16;
+    unsigned int exp = ((unsigned int)h >> 10) & 0x1fu;
+    unsigned int mant = (unsigned int)h & 0x3ffu;
+    unsigned int bits;
+    if (exp == 0) {
+        if (mant == 0) bits = sign;
+        else {
+            int e = -14;
+            while ((mant & 0x400u) == 0) { mant <<= 1; --e; }
+            mant &= 0x3ffu;
+            bits = sign | ((unsigned int)(e + 127) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) bits = sign | 0x7f800000u | (mant << 13);
+    else bits = sign | ((exp + 112u) << 23) | (mant << 13);
+    return __uint_as_float(bits);
+}
 // Blocked SGEMM for prefill: C[M,N] = A[M,K] * W^T + bias, where W is [N,K]
 // row-major. Same weight layout as the GEMV baseline in linear.cu
 // (weights[n * K + k]), so both paths share the exact same device slices.
@@ -91,6 +108,62 @@ extern "C" __global__ void gemm(
         for (int j = 0; j < TN; ++j) {
             int gCol = blockCol + threadCol * TN + j;
             if (gCol < N) C[gRow * N + gCol] = acc[i * TN + j] + bias[gCol];
+        }
+    }
+}
+
+// Weight-only reduced-precision variant. FP32 activations/accumulators and
+// output preserve the rest of the inference pipeline's numeric type.
+extern "C" __global__ void gemm_mixed(
+    const float* __restrict__ A, const void* __restrict__ W,
+    const float* __restrict__ scales, const float* __restrict__ bias,
+    float* __restrict__ C, int M, int N, int K, int dtype) {
+    __shared__ float As[BM * BK];
+    __shared__ float Bs[BK * BN];
+    const int tid=threadIdx.x, threadRow=tid/COL_GROUPS, threadCol=tid%COL_GROUPS;
+    const int blockRow=blockIdx.y*BM, blockCol=blockIdx.x*BN;
+    float acc[TM*TN];
+#pragma unroll
+    for(int i=0;i<TM*TN;++i) acc[i]=0.0f;
+    const int numKTiles=(K+BK-1)/BK;
+    for(int t=0;t<numKTiles;++t) {
+        const int kTile=t*BK;
+        for(int idx=tid;idx<BM*BK;idx+=THREADS) {
+            int r=idx/BK,c=idx%BK,gRow=blockRow+r,gK=kTile+c;
+            As[idx]=(gRow<M&&gK<K)?A[gRow*K+gK]:0.0f;
+        }
+        for(int idx=tid;idx<BK*BN;idx+=THREADS) {
+            int r=idx/BN,c=idx%BN,gCol=blockCol+c,gK=kTile+r;
+            float w=0.0f;
+            if(gCol<N&&gK<K) {
+                int wi=gCol*K+gK;
+                if(dtype==1) w=half_bits_to_float(((const unsigned short*)W)[wi]);
+                else w=((const signed char*)W)[wi]*scales[gCol];
+            }
+            Bs[idx]=w;
+        }
+        __syncthreads();
+        for(int k=0;k<BK;++k) {
+            float aReg[TM];
+#pragma unroll
+            for(int i=0;i<TM;++i) aReg[i]=As[(threadRow*TM+i)*BK+k];
+#pragma unroll
+            for(int j=0;j<TN;++j) {
+                float bVal=Bs[k*BN+threadCol*TN+j];
+#pragma unroll
+                for(int i=0;i<TM;++i) acc[i*TN+j]=fmaf(aReg[i],bVal,acc[i*TN+j]);
+            }
+        }
+        __syncthreads();
+    }
+#pragma unroll
+    for(int i=0;i<TM;++i) {
+        int gRow=blockRow+threadRow*TM+i;
+        if(gRow>=M) continue;
+#pragma unroll
+        for(int j=0;j<TN;++j) {
+            int gCol=blockCol+threadCol*TN+j;
+            if(gCol<N) C[gRow*N+gCol]=acc[i*TN+j]+bias[gCol];
         }
     }
 }

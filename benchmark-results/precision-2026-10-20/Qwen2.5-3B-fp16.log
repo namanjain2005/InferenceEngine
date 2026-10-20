@@ -1,0 +1,448 @@
+warning: field `util_pct` is never read
+  --> src/gpu.rs:12:9
+   |
+ 6 | pub struct GpuDevice {
+   |            --------- field in this struct
+...
+12 |     pub util_pct: usize,
+   |         ^^^^^^^^
+   |
+   = note: `GpuDevice` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `len` is never used
+  --> src/kernels/mod.rs:20:12
+   |
+19 | impl LinearWeights {
+   | ------------------ method in this implementation
+20 |     pub fn len(&self) -> usize {
+   |            ^^^
+
+warning: method `weight_format` is never used
+  --> src/kernels/mod.rs:46:8
+   |
+45 | pub trait LinearOp {
+   |           -------- method in this trait
+46 |     fn weight_format(&self) -> WeightFormat;
+   |        ^^^^^^^^^^^^^
+
+warning: field `format` is never read
+  --> src/kernels/cublas_linear.rs:23:5
+   |
+22 | pub struct CublasLinear {
+   |            ------------ field in this struct
+23 |     format: WeightFormat,
+   |     ^^^^^^
+
+warning: associated function `new` is never used
+  --> src/kernels/cublas_linear.rs:33:12
+   |
+32 | impl CublasLinear {
+   | ----------------- associated function in this implementation
+33 |     pub fn new(context: &Arc<CudaContext>, stream: Arc<CudaStream>) -> Result<Self, String> {
+   |            ^^^
+
+warning: associated function `new` is never used
+  --> src/kernels/linear.rs:22:12
+   |
+21 | impl LinearKernel {
+   | ----------------- associated function in this implementation
+22 |     pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
+   |            ^^^
+
+warning: methods `tensor_names` and `read_embedding_row` are never used
+   --> src/safetensors.rs:120:12
+    |
+ 26 | impl SafeTensors {
+    | ---------------- methods in this implementation
+...
+120 |     pub fn tensor_names(&self) -> Vec<String> {
+    |            ^^^^^^^^^^^^
+...
+200 |     pub fn read_embedding_row(
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: `Engine` (bin "Engine") generated 7 warnings
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running `target/release/Engine --gpu 1 --model-dir models/Qwen2.5-3B-Instruct --max-tokens 16 --linear both --weight-format fp16`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 1.
+[2/5] Initializing CUDA Context on GPU 1...
+Initializing CUDA Context on GPU 1...
+CUDA Context and default stream ready on GPU 1.
+   -> Linear backend(s): custom, cublas
+   -> Projection weight format: F16 (FP32 activations and accumulation)
+   -> GPU 1 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-3B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 36 layers, hidden=2048, intermediate=11008, 16 q_heads, 2 kv_heads (GQA)
+   -> Safetensors opened: 434 tensors in header.
+   -> Validated 3085938688 parameters (5.75 GiB source weights; 11.50 GiB as f32 on GPU).
+   Uploading embedding and final norm weights to GPU...
+
+   Loading and uploading layer weights: 1/36
+   Loading and uploading layer weights: 2/36
+   Loading and uploading layer weights: 3/36
+   Loading and uploading layer weights: 4/36
+   Loading and uploading layer weights: 5/36
+   Loading and uploading layer weights: 6/36
+   Loading and uploading layer weights: 7/36
+   Loading and uploading layer weights: 8/36
+   Loading and uploading layer weights: 9/36
+   Loading and uploading layer weights: 10/36
+   Loading and uploading layer weights: 11/36
+   Loading and uploading layer weights: 12/36
+   Loading and uploading layer weights: 13/36
+   Loading and uploading layer weights: 14/36
+   Loading and uploading layer weights: 15/36
+   Loading and uploading layer weights: 16/36
+   Loading and uploading layer weights: 17/36
+   Loading and uploading layer weights: 18/36
+   Loading and uploading layer weights: 19/36
+   Loading and uploading layer weights: 20/36
+   Loading and uploading layer weights: 21/36
+   Loading and uploading layer weights: 22/36
+   Loading and uploading layer weights: 23/36
+   Loading and uploading layer weights: 24/36
+   Loading and uploading layer weights: 25/36
+   Loading and uploading layer weights: 26/36
+   Loading and uploading layer weights: 27/36
+   Loading and uploading layer weights: 28/36
+   Loading and uploading layer weights: 29/36
+   Loading and uploading layer weights: 30/36
+   Loading and uploading layer weights: 31/36
+   Loading and uploading layer weights: 32/36
+   Loading and uploading layer weights: 33/36
+   Loading and uploading layer weights: 34/36
+   Loading and uploading layer weights: 35/36
+   Loading and uploading layer weights: 36/36
+   All model weights are resident on the GPU.
+   -> Model loaded in 35.65s
+   -> Warmup done for backend custom.
+   -> Warmup done for backend cublas.
+
+[5/5] Running 9 prompt(s)...
+
+--- Prompt 1/9: 1 - Tiny context ---
+Input prompt:
+What is 7 + 5? Answer in one complete sentence.
+Input tokens: 33 (identical input fed to every backend)
+
+[custom] 1 - Tiny context -> generated output:
+7 + 5 is equal to 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 187.58ms; generated 11 tokens with 11 decode steps in 335.33ms (32.80 decode tok/s)
+
+[cublas] 1 - Tiny context -> generated output:
+7 + 5 is equal to 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 22.71ms; generated 11 tokens with 11 decode steps in 159.66ms (68.90 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       187.58ms     335.33ms          32.80        11
+cublas        22.71ms     159.66ms          68.90        11
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (11/11)
+  prefill last-token logits: max abs diff (finite) 1.225e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 187.58ms | cublas 22.71ms  ->  cublas 8.26x faster
+  decode:  custom 335.33ms | cublas 159.66ms  ->  cublas 2.10x faster
+  end-to-end: custom 522.91ms | cublas 182.37ms  ->  cublas 2.87x faster
+
+--- Prompt 2/9: 2 - Short context ---
+Input prompt:
+Changing one kernel detail at a time can make a performance experiment easier to
+understand. Why? Answer in one complete sentence.
+Input tokens: 45 (identical input fed to every backend)
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by allowing each modification's
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 192.05ms; generated 16 tokens with 15 decode steps in 458.29ms (32.73 decode tok/s)
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by allowing each modification's
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 22.51ms; generated 16 tokens with 15 decode steps in 217.65ms (68.92 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       192.05ms     458.29ms          32.73        16
+cublas        22.51ms     217.65ms          68.92        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.793e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 192.05ms | cublas 22.51ms  ->  cublas 8.53x faster
+  decode:  custom 458.29ms | cublas 217.65ms  ->  cublas 2.11x faster
+  end-to-end: custom 650.34ms | cublas 240.15ms  ->  cublas 2.71x faster
+
+--- Prompt 3/9: 3 - Medium context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+Reliable software is built by checking each layer of a system independently.
+Input data is validated before it reaches a computation. The computation should
+preserve its mathematical meaning while making good use of the hardware. Results
+are then checked against a simple reference. Performance measurements should
+record the input size, output size, device, and settings so that later runs can
+be compared fairly. A useful experiment changes one implementation detail at a
+time and keeps the workload fixed. This makes it easier to identify which change
+caused an improvement or regression.
+
+Summarize the main idea of the passage in two short sentences.
+Input tokens: 154 (identical input fed to every backend)
+
+[custom] 3 - Medium context -> generated output:
+The passage emphasizes the importance of independent validation and testing at each layer of a software
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 254.89ms; generated 16 tokens with 15 decode steps in 465.72ms (32.21 decode tok/s)
+
+[cublas] 3 - Medium context -> generated output:
+The passage emphasizes the importance of independent validation and testing at each layer of a software
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 39.88ms; generated 16 tokens with 15 decode steps in 225.20ms (66.61 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       254.89ms     465.72ms          32.21        16
+cublas        39.88ms     225.20ms          66.61        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.170e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 254.89ms | cublas 39.88ms  ->  cublas 6.39x faster
+  decode:  custom 465.72ms | cublas 225.20ms  ->  cublas 2.07x faster
+  end-to-end: custom 720.61ms | cublas 265.08ms  ->  cublas 2.72x faster
+
+--- Prompt 4/9: 4 - Long context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+A small inference engine moves data through several stages. It begins by
+converting text into token identifiers. The model maps those identifiers into
+vectors, applies normalization, and computes query, key, and value projections.
+Rotary position information is added to the query and key vectors. Keys and
+values from earlier positions are kept in a cache so that each generated token
+can attend to the existing context without recomputing every projection.
+
+For one query head, attention compares the query with the keys at every cached
+position. Each score is scaled, normalized with softmax, and used to form a
+weighted sum of the values. In multi-head attention, each query head has its own
+key and value head. In grouped-query attention, several query heads share a key
+and value head. The same computation can handle either arrangement when the
+query-head and KV-head counts are provided correctly.
+
+GPU performance depends on how threads access memory as well as how many
+operations they perform. Neighboring lanes are most effective when they read
+neighboring values. A warp can cooperate on a dot product by loading adjacent
+head dimensions and reducing the partial sums. Softmax also needs reductions to
+find the maximum score and the sum of exponentials. Measuring one optimization
+at a time helps show whether coalesced reads or parallel reductions improve the
+actual workload.
+
+Based on the passage, explain grouped-query attention in two short sentences.
+Input tokens: 321 (identical input fed to every backend)
+
+[custom] 4 - Long context -> generated output:
+In grouped-query attention, multiple query heads share a single key and value head,
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 486.10ms; generated 16 tokens with 15 decode steps in 476.64ms (31.47 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+In grouped-query attention, multiple query heads share a single key and value head,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 58.14ms; generated 16 tokens with 15 decode steps in 236.05ms (63.55 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       486.10ms     476.64ms          31.47        16
+cublas        58.14ms     236.05ms          63.55        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 9.747e-3 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 486.10ms | cublas 58.14ms  ->  cublas 8.36x faster
+  decode:  custom 476.64ms | cublas 236.05ms  ->  cublas 2.02x faster
+  end-to-end: custom 962.74ms | cublas 294.19ms  ->  cublas 3.27x faster
+
+--- Prompt 5/9: 5 - Long context with repeated structure ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+The first record has a name, a category, and a numeric value. The second record
+has a name, a category, and a numeric value. The third record has a name, a
+category, and a numeric value. The fourth record has a name, a category, and a
+numeric value. The fifth record has a name, a category, and a numeric value.
+The sixth record has a name, a category, and a numeric value. The seventh record
+has a name, a category, and a numeric value. The eighth record has a name, a
+category, and a numeric value. The ninth record has a name, a category, and a
+numeric value. The tenth record has a name, a category, and a numeric value.
+
+When processing a long sequence, the key and value cache grows with the number
+of positions. Every new query must compare against the cached keys and combine
+the cached values. Changing the thread layout can improve memory transactions,
+but the result should still match the same attention calculation. Context size
+is therefore an important workload dimension when comparing kernel versions.
+
+According to the passage, what does the key-value cache save the model from
+recomputing? Answer in one complete sentence.
+Input tokens: 282 (identical input fed to every backend)
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 409.35ms; generated 16 tokens with 15 decode steps in 473.85ms (31.66 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the numeric values associated with
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 55.68ms; generated 16 tokens with 15 decode steps in 233.44ms (64.26 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       409.35ms     473.85ms          31.66        16
+cublas        55.68ms     233.44ms          64.26        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.373e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 409.35ms | cublas 55.68ms  ->  cublas 7.35x faster
+  decode:  custom 473.85ms | cublas 233.44ms  ->  cublas 2.03x faster
+  end-to-end: custom 883.20ms | cublas 289.12ms  ->  cublas 3.05x faster
+
+--- Prompt 6/9: 6 - Multi-step arithmetic ---
+Input prompt:
+A library has 6 shelves with 14 books on each shelf. It lends 19 books. Show
+one calculation and state how many books remain in one complete sentence.
+Input tokens: 56 (identical input fed to every backend)
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+To determine how many books remain in the library after lending out 19 books
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 193.63ms; generated 16 tokens with 15 decode steps in 459.10ms (32.67 decode tok/s)
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+To determine how many books remain in the library after lending out 19 books
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 23.13ms; generated 16 tokens with 15 decode steps in 219.29ms (68.40 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       193.63ms     459.10ms          32.67        16
+cublas        23.13ms     219.29ms          68.40        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.568e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 193.63ms | cublas 23.13ms  ->  cublas 8.37x faster
+  decode:  custom 459.10ms | cublas 219.29ms  ->  cublas 2.09x faster
+  end-to-end: custom 652.72ms | cublas 242.42ms  ->  cublas 2.69x faster
+
+--- Prompt 7/9: 7 - Compare totals ---
+Input prompt:
+Run A generated 8 tokens for each of 120 prompts. Run B generated 12 tokens for
+each of the same 120 prompts. Which run generated more tokens, and by how many?
+Show the calculation and answer in one sentence.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 7 - Compare totals -> generated output:
+Run A generated more tokens. The calculation is as follows: Run A generated
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 223.12ms; generated 16 tokens with 15 decode steps in 460.20ms (32.59 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run A generated more tokens. The calculation is as follows: Run A generated
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 29.50ms; generated 16 tokens with 15 decode steps in 220.19ms (68.12 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       223.12ms     460.20ms          32.59        16
+cublas        29.50ms     220.19ms          68.12        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.305e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 223.12ms | cublas 29.50ms  ->  cublas 7.56x faster
+  decode:  custom 460.20ms | cublas 220.19ms  ->  cublas 2.09x faster
+  end-to-end: custom 683.32ms | cublas 249.69ms  ->  cublas 2.74x faster
+
+--- Prompt 8/9: 8 - Exact format ---
+Input prompt:
+Return exactly one JSON object with the keys "answer" and "check". Set "answer"
+to the result of 3 times 7 and "check" to the string "3 x 7". Do not include
+Markdown or any text outside the JSON object.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 223.80ms; generated 16 tokens with 15 decode steps in 458.84ms (32.69 decode tok/s)
+
+[cublas] 8 - Exact format -> generated output:
+{"answer": 21, "check": "3 x 7"}
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 29.35ms; generated 16 tokens with 15 decode steps in 219.51ms (68.34 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       223.80ms     458.84ms          32.69        16
+cublas        29.35ms     219.51ms          68.34        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 3.186e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 223.80ms | cublas 29.35ms  ->  cublas 7.63x faster
+  decode:  custom 458.84ms | cublas 219.51ms  ->  cublas 2.09x faster
+  end-to-end: custom 682.63ms | cublas 248.85ms  ->  cublas 2.74x faster
+
+--- Prompt 9/9: 9 - Time extraction ---
+Input prompt:
+The workshop began setup at 9:00 AM. Doors opened at 10:30 AM, and the event
+ended at 12:00 PM. How much time passed between the doors opening and the event
+ending? Answer in minutes in one complete sentence.
+Input tokens: 78 (identical input fed to every backend)
+
+[custom] 9 - Time extraction -> generated output:
+The time that passed between the doors opening at 10:30 AM
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 223.16ms; generated 16 tokens with 15 decode steps in 460.44ms (32.58 decode tok/s)
+
+[cublas] 9 - Time extraction -> generated output:
+The time that passed between the doors opening at 10:30 AM
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 29.65ms; generated 16 tokens with 15 decode steps in 221.82ms (67.62 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       223.16ms     460.44ms          32.58        16
+cublas        29.65ms     221.82ms          67.62        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.268e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 223.16ms | cublas 29.65ms  ->  cublas 7.53x faster
+  decode:  custom 460.44ms | cublas 221.82ms  ->  cublas 2.08x faster
+  end-to-end: custom 683.60ms | cublas 251.47ms  ->  cublas 2.72x faster
+
+============================================================
+ Inference finished successfully on GPU 1!
+============================================================

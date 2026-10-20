@@ -1,5 +1,10 @@
 # Prefill Benchmark: previous (`main`) vs new (`feat/gemm-prefill`) — fair protocol
 
+For the latest full-suite run on `c923c74`, including per-prompt timings for
+both backends, KV-cache growth coverage, and standalone decode-kernel checks,
+see [HISTORY_BENCHMARK.md](HISTORY_BENCHMARK.md). The tables below are the
+historical per-prompt comparisons from the prefill and cuBLAS milestones.
+
 `main` is untouched and remains the baseline. The new branch keeps
 `src/kernels/layer/linear.cu` + `LinearKernel::forward` unchanged (decode +
 comparison baseline) and adds `src/kernels/layer/gemm.cu` +
@@ -268,3 +273,13 @@ Findings:
   backends (not a cuBLAS defect); a `__syncthreads()` after reading the row
   maximum fixes it, and runs are now bit-stable. Timing cells measure real work
   either way and are unaffected.
+
+
+## Precision-format and larger-checkpoint runs
+
+The full all-prompt dual-backend results for F32, FP16, and INT8 weights on
+Qwen2.5-1.5B/3B/7B and FP16/INT8 on 14B are recorded in
+[`HISTORY_BENCHMARK.md`](HISTORY_BENCHMARK.md#precision-formats-and-larger-checkpoints-2026-10-20).
+That section links the per-prompt CSV and captured run logs. These are
+single-pass end-to-end timings; the historical prefill comparison tables above
+remain the controlled median-of-three prefill benchmark.
