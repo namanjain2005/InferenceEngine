@@ -164,6 +164,8 @@ preallocated outputs. Times are milliseconds per call on the same shared GPU 4.
 
 ## Precision formats and larger checkpoints (2026-10-20)
 
+Implementation commit: `b4c2681` (`feat(inference): add fp16 and int8 weight formats`).
+
 Commit-level summary: add FP16 projection-weight storage and symmetric
 per-output-row INT8 weight quantization, retaining FP32 activations and
 accumulation in the custom path; support untied `lm_head` weights; add a
