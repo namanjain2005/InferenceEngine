@@ -573,3 +573,48 @@ are archived in [`benchmark-results/kv-cache-facade-2026-10-20/`](benchmark-resu
 The facade also passed all 64 static request records for the 1.5B model on
 custom and cuBLAS across batch sizes 1, 2, 5, and 8; every record matched its
 single-request reference.
+
+## Extended long-context comparison (2026-10-21)
+
+The prompt suite was extended with repeated-token prompts of approximately
+1K/4K/8K tokens (actual token counts 1,006/4,036/8,076). Paired full-suite
+runs compare pre-FlashAttention commit `47960ee` with FlashAttention commit
+`d381615`, using `--max-tokens 16 --linear both --weight-format fp16` on
+Tesla V100-SXM2-32GB, CUDA 12.4, driver 550.144.03. The 1.5B, 3B, and 7B
+pairs used GPU 3; both 14B runs used GPU 4. The host was shared, GPU 3 was
+often heavily occupied, and each prompt was timed once. Treat timing changes
+as noisy observations, especially for the shorter contexts.
+
+| Model | Context coverage | Custom 8K prefill old → new | cuBLAS 8K prefill old → new | Correctness / status |
+|---|---|---:|---:|---|
+| Qwen2.5-1.5B | 1K, 4K, 8K completed | 20.62s → 17.54s (-14.9%) | 13.12s → 10.02s (-23.6%) | Output text matched at every completed case/backend |
+| Qwen2.5-3B | 1K, 4K, 8K completed | 38.39s → 33.12s (-13.7%) | 22.76s → 17.36s (-23.7%) | Output text matched at every completed case/backend |
+| Qwen2.5-7B | 1K, 4K, 8K completed | 70.46s → 62.75s (-10.9%) | 31.85s → 24.25s (-23.9%) | Output text matched at every completed case/backend |
+| Qwen2.5-14B | 1K completed; 4K OOM; 8K not reached | — | — | Both revisions OOM in custom prefill at 4K while allocating GEMM output |
+
+The complete 24-row table preserves the per-case prefill/decode time, output
+comparison, and separate backend status, including the 14B cuBLAS and 8K cases
+not reached after the suite stopped at 4K:
+[`long_context_comparison.md`](benchmark-results/flash-attention-long-context-2026-10-21/long_context_comparison.md).
+The CSV is
+[`long_context_comparison.csv`](benchmark-results/flash-attention-long-context-2026-10-21/long_context_comparison.csv);
+`compare.py` rebuilds both reports from the captured old/new logs. The logs
+also retain per-prompt output, timing, and failure details.
+
+Reproduction command for each model/revision (GPU 3 for 1.5B/3B/7B and GPU 4
+for 14B; model directory adjusted per row):
+
+```bash
+cargo run --release -- --gpu <id> --model-dir models/Qwen2.5-<size>-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+```
+
+Validation: both revisions completed all 12 prompts on 1.5B, 3B, and 7B, with
+matching old/new generated text for every completed prompt and backend. Both
+14B runs completed prompts 1–10 (through 1K); prompt 11 (4K) failed during
+custom prefill with CUDA out of memory while allocating the GEMM output, and
+prompt 12 (8K) was not reached. This is a model working-memory limit in these
+runs, not an attention shared-memory launch failure. `cargo test --all-targets`
+passed after adding the expanded prompt file (2 library tests; binary and
+example targets passed with 0 tests). The 0.5B checkpoint is not available in
+the local model fixtures.

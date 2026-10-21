@@ -357,3 +357,22 @@ was initially idle, but the cluster is shared and single-pass measurements are
 subject to run-to-run noise. A 257-token targeted prompt crossed the 256-key tile boundary in
 prefill and continued at 258 positions in decode; it completed successfully
 ([log](benchmark-results/flash-attention-2026-10-21/tile-boundary-257tokens.log)).
+
+### Extended long-context stress cases
+
+The prompt suite now includes approximately 1K, 4K, and 8K token contexts.
+Their actual token counts were 1,006, 4,036, and 8,076. The complete paired
+per-model, per-backend table, including OOM and not-reached statuses, is in
+[`long_context_comparison.md`](benchmark-results/flash-attention-long-context-2026-10-21/long_context_comparison.md).
+Raw logs and the report generator are in the same directory.
+
+On the shared Tesla V100-SXM2-32GB, the 1.5B, 3B, and 7B models completed all
+three lengths on both the pre-FlashAttention commit and the FlashAttention
+commit. At 8K, measured prefill was 10.9–14.9% lower for the custom backend
+and 23.6–23.9% lower for cuBLAS; these are single-pass observations while GPU
+3 had competing workloads, so they are directional rather than controlled
+speedup claims. Decode changes ranged from -0.5% to +4.2% (custom) and
+-2.3% to +4.2% (cuBLAS). Both 14B runs completed 1K and ran out of GPU memory
+at 4K during custom prefill GEMM output allocation; 8K was not reached. The
+full suite stops at that failure, so its later 14B/backend cells are explicitly
+marked as not reached.
