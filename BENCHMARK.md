@@ -376,3 +376,81 @@ speedup claims. Decode changes ranged from -0.5% to +4.2% (custom) and
 at 4K during custom prefill GEMM output allocation; 8K was not reached. The
 full suite stops at that failure, so its later 14B/backend cells are explicitly
 marked as not reached.
+
+## CUTLASS FP16 causal prefill A/B (2026-10-21)
+
+The CUTLASS path uses NVIDIA CUTLASS v3.9.2's fused online-softmax attention
+kernel with an SM70 configuration for V100. FlashAttention remains selectable
+as the A/B path. Both paths receive identical FP16 Q/K/V and an FP16 KV cache;
+softmax/output accumulation is FP32. Model projections and residual-stream
+activations remain unchanged. QKV projections are not fused. Decode continues
+to use FlashAttention, reading the same FP16 cache in the FP16 attention mode.
+
+The full per-prompt A/B measurements and correctness results are in
+[`per_prompt_ab.csv`](benchmark-results/cutlass-prefill-2026-10-21/per_prompt_ab.csv).
+The 12-prompt logs are archived for [1.5B](benchmark-results/cutlass-prefill-2026-10-21/prompt-suite-1.5B.log),
+[3B](benchmark-results/cutlass-prefill-2026-10-21/prompt-suite-3B.log), and
+the 7B [paired attempt](benchmark-results/cutlass-prefill-2026-10-21/prompt-suite-7B.log),
+[Flash path](benchmark-results/cutlass-prefill-2026-10-21/prompt-suite-7B-custom.log),
+and [CUTLASS path](benchmark-results/cutlass-prefill-2026-10-21/prompt-suite-7B-cutlass.log).
+The standalone 7B runs complete all 12 prompts; the paired process hit a
+shared-VRAM allocation failure at the 8K prompt while switching to CUTLASS.
+
+For exact-context comparison, the program generated synthetic prompts at
+exactly 1,024, 4,096, and 8,192 input tokens. Each path had one untimed warmup
+and three timed full-model prefill runs; the CUDA stream was synchronized per
+run and the median was reported. `--max-tokens 1` checks final logits without
+timing decode. These are full prefill timings (linear layers plus attention),
+not isolated attention-kernel timings. For 1.5B and 3B the linear backend was
+cuBLAS; 7B used custom linear kernels because its cuBLAS 8K case ran out of
+memory. The comparison within each row keeps that linear backend fixed. The
+previous revision's FP32 FlashAttention/cache measurements are not a fair
+baseline for this FP16 experiment, so no cross-revision speedup is inferred.
+
+| Model | Tokens | Linear backend | FlashAttention prefill | CUTLASS prefill | Speedup | Max logit diff | Output check |
+|---|---:|---|---:|---:|---:|---:|---|
+| Qwen2.5-1.5B | 1,024 | cuBLAS | 154.22 ms | 72.22 ms | 2.14x | 2.159e-2 | IDs identical (1/1) |
+| Qwen2.5-1.5B | 4,096 | cuBLAS | 1,460 ms | 319.83 ms | 4.57x | 1.266e-2 | IDs identical (1/1) |
+| Qwen2.5-1.5B | 8,192 | cuBLAS | 5,440 ms | 887.94 ms | 6.13x | 3.025e-2 | IDs identical (1/1) |
+| Qwen2.5-3B | 1,024 | cuBLAS | 254.34 ms | 128.93 ms | 1.97x | 2.682e-2 | IDs identical (1/1) |
+| Qwen2.5-3B | 4,096 | cuBLAS | 2,520 ms | 601.90 ms | 4.19x | 4.881e-2 | IDs identical (1/1) |
+| Qwen2.5-3B | 8,192 | cuBLAS | 9,370 ms | 1,670 ms | 5.62x | 4.575e-2 | IDs identical (1/1) |
+| Qwen2.5-7B | 1,024 | custom | 3,000 ms | 2,830 ms | 1.06x | 1.229e-2 | IDs identical (1/1) |
+| Qwen2.5-7B | 4,096 | custom | 13,840 ms | 11,200 ms | 1.24x | 1.599e-2 | IDs identical (1/1) |
+| Qwen2.5-7B | 8,192 | custom | 33,420 ms | 23,100 ms | 1.45x | 8.933e-3 | IDs identical (1/1) |
+
+The speedup grows with sequence length in these runs, consistent with the
+quadratic attention work becoming a larger portion of prefill. The timings do
+not establish that either implementation is bandwidth-bound. Nsight Compute
+was attempted, but the driver returned `ERR_NVGPUCTRPERM` and no kernels were
+profiled ([log](benchmark-results/cutlass-prefill-2026-10-21/ncu-flash-1k.log)).
+Kernel-level memory/compute counters are unavailable in this run. GPU 0 was a
+shared Tesla V100-SXM2-32GB (CUDA 12.4, driver 550.144.03), so treat the
+absolute times as observations from that run, not isolated-device guarantees.
+
+The 7B paired `--linear both` suite hit OOM in cuBLAS while allocating its
+FP16 input at 8K. In the paired custom run, FlashAttention finished that
+prompt but the following CUTLASS pass hit OOM while allocating the vector-add
+output. Each path completed the full 12-prompt suite when run separately; the
+exact 8K synthetic A/B also completed on the custom linear backend. The 14B
+FP16 checkpoint did not fit: loading failed at layer 28 while uploading the
+MLP up-projection, before any prompt ran. The local 0.5B fixture is absent.
+
+Reproduce the exact-context comparison (change model/backend according to the
+table):
+
+```bash
+cargo run --release -- --gpu 0 \
+  --model-dir models/Qwen2.5-1.5B-Instruct \
+  --weight-format fp16 --attention-format fp16 \
+  --prefill-attention both --bench-prefill --bench-repeat 3 \
+  --max-tokens 1 --linear cublas \
+  --benchmark-contexts 1024,4096,8192
+```
+
+The 1.5B, 3B, and 7B exact-context logs are
+[1.5B](benchmark-results/cutlass-prefill-2026-10-21/long-context-1.5B.log),
+[3B](benchmark-results/cutlass-prefill-2026-10-21/long-context-3B.log), and
+[7B custom](benchmark-results/cutlass-prefill-2026-10-21/long-context-7B-custom.log).
+The 14B capacity attempt is captured
+[here](benchmark-results/cutlass-prefill-2026-10-21/oom-14B.log).

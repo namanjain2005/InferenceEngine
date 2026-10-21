@@ -5,10 +5,14 @@ use inference_engine::gpu::{init_cuda_device, print_gpu_table, query_nvidia_smi,
 use inference_engine::kernels::cublas_linear::CublasLinear;
 use inference_engine::kernels::linear::LinearKernel;
 use inference_engine::kernels::ops::{
-    ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels,
+    ArgmaxKernel, AttentionKernel, PrefillAttentionBackend, RmsNormKernel, SwiGluKernel,
+    VectorKernels,
 };
 use inference_engine::kernels::{LinearOp, WeightFormat};
-use inference_engine::model::{ModelBackend, Qwen2Model, validate_qwen2_checkpoint};
+use inference_engine::model::{
+    DEFAULT_KV_CACHE_CAPACITY, F16KVCacheStrategy, KVCacheConfig, ModelBackend, Qwen2Model,
+    validate_qwen2_checkpoint,
+};
 use inference_engine::safetensors::SafeTensors;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,11 +66,27 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     bench_repeat: usize,
 
+    /// Attention implementation used by causal prefill: `flash`, `cutlass`,
+    /// or `both` for a matched head-to-head run. Use --bench-prefill for
+    /// repeated prefill timing comparisons.
+    #[arg(long, default_value = "flash")]
+    prefill_attention: String,
+
+    /// Attention and KV-cache representation: `f32` (default) or `f16`.
+    /// Use `f16` for a matched FlashAttention/CUTLASS comparison.
+    #[arg(long, default_value = "f32")]
+    attention_format: String,
+
     /// Which linear backends to run per prompt: `both` (default; custom and
     /// cuBLAS on the same input, outputs + timings compared), `custom`
     /// (hand-rolled GEMV/GEMM kernels only), or `cublas` (sgemm only).
     #[arg(long, default_value = "both")]
     linear: String,
+
+    /// Run synthetic prompts of exactly these input-token lengths instead of
+    /// BASE_PROMPTS.txt. Intended for long-context attention measurements.
+    #[arg(long, value_delimiter = ',')]
+    benchmark_contexts: Vec<usize>,
 
     /// Resident projection weight format: f32, f16, or symmetric row-wise int8.
     #[arg(long, default_value = "f32")]
@@ -138,6 +158,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     };
+    let prefill_attention_modes = match args.prefill_attention.to_lowercase().as_str() {
+        "flash" => vec![PrefillAttentionBackend::Flash],
+        "cutlass" => vec![PrefillAttentionBackend::Cutlass],
+        "both" => vec![
+            PrefillAttentionBackend::Flash,
+            PrefillAttentionBackend::Cutlass,
+        ],
+        other => {
+            return Err(format!(
+                "Unknown --prefill-attention '{other}': expected flash, cutlass, or both"
+            )
+            .into());
+        }
+    };
+    let attention_f16 = match args.attention_format.to_lowercase().as_str() {
+        "f32" | "fp32" => false,
+        "f16" | "fp16" => true,
+        other => {
+            return Err(
+                format!("Unknown --attention-format '{other}': expected f32 or f16").into(),
+            );
+        }
+    };
+    if prefill_attention_modes.contains(&PrefillAttentionBackend::Cutlass) && !attention_f16 {
+        return Err(
+            "CUTLASS prefill requires --attention-format f16 so its comparison uses FP16 Q/K/V and cache".into(),
+        );
+    }
+    if !args.benchmark_contexts.is_empty() && !args.bench_prefill {
+        return Err("--benchmark-contexts requires --bench-prefill".into());
+    }
+    if !args.benchmark_contexts.is_empty() && args.prompt.is_some() {
+        return Err("Use either --benchmark-contexts or --prompt, not both".into());
+    }
+    if !args.benchmark_contexts.is_empty() && args.prefill.to_lowercase() != "gemm" {
+        return Err(
+            "--benchmark-contexts measures the batched GEMM prefill path; use --prefill gemm"
+                .into(),
+        );
+    }
     let linear_custom = LinearKernel::new_with_format(&cuda_ctx, weight_format)?;
     let linear_cublas =
         CublasLinear::new_with_format(&cuda_ctx, cuda_stream.clone(), weight_format)?;
@@ -170,9 +230,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "   -> Projection weight format: {:?} (FP32 activations and accumulation)",
         weight_format
     );
+    println!(
+        "   -> Prefill attention path(s): {}",
+        prefill_attention_modes
+            .iter()
+            .map(|mode| match mode {
+                PrefillAttentionBackend::Flash => "FlashAttention",
+                PrefillAttentionBackend::Cutlass => "CUTLASS",
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "   -> Attention Q/K/V and KV cache format: {}",
+        if attention_f16 { "FP16" } else { "FP32" }
+    );
     let rmsnorm = RmsNormKernel::new(&cuda_ctx)?;
     let swiglu = SwiGluKernel::new(&cuda_ctx)?;
-    let attention = AttentionKernel::new(&cuda_ctx)?;
+    let attention = AttentionKernel::new(&cuda_ctx, &cuda_stream)?;
+    attention.set_prefill_backend(prefill_attention_modes[0]);
     let vector = VectorKernels::new(&cuda_ctx)?;
     let argmax = ArgmaxKernel::new(&cuda_ctx)?;
 
@@ -250,7 +326,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_load = std::time::Instant::now();
     // Weights are uploaded once and shared by every backend (identical
     // row-major layout), so the two paths never duplicate resident weights.
-    let model = Qwen2Model::load(&mut st, config.clone(), backends[0].1, &cuda_stream)?;
+    let cache_config = if attention_f16 {
+        KVCacheConfig::new(Arc::new(F16KVCacheStrategy), DEFAULT_KV_CACHE_CAPACITY)?
+    } else {
+        KVCacheConfig::default()
+    };
+    let model = Qwen2Model::load_with_cache_config(
+        &mut st,
+        config.clone(),
+        backends[0].1,
+        &cuda_stream,
+        cache_config,
+    )?;
     println!("   -> Model loaded in {:.2?}", start_load.elapsed());
 
     // Warmup: run every prefill path once per backend on throwaway caches so
@@ -321,9 +408,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 5. Run the full built-in suite unless a one-off prompt was supplied.
-    let prompts = match args.prompt {
-        Some(prompt) => vec![("Custom prompt".to_string(), prompt)],
-        None => base_prompts(),
+    let prompts = if !args.benchmark_contexts.is_empty() {
+        let mut generated = Vec::with_capacity(args.benchmark_contexts.len());
+        for &token_count in &args.benchmark_contexts {
+            if token_count == 0 {
+                return Err("Benchmark context lengths must be non-zero".into());
+            }
+            let text = synthetic_context_for_tokens(&tokenizer, token_count)?;
+            generated.push((format!("Synthetic {token_count}-token context"), text));
+        }
+        generated
+    } else {
+        match args.prompt {
+            Some(prompt) => vec![("Custom prompt".to_string(), prompt)],
+            None => base_prompts(),
+        }
     };
     if prompts.is_empty() {
         return Err("No prompts found in BASE_PROMPTS.txt".into());
@@ -354,32 +453,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Run every requested backend on the exact same input tokens, then
         // print the generated outputs, timings, and a head-to-head check.
-        let mut outcomes = Vec::with_capacity(backends.len());
-        for &(backend_name, linear) in &backends {
-            let outcome = run_backend(
-                backend_name,
-                label,
-                &model,
-                linear,
-                &tokenizer,
-                &argmax,
-                &rmsnorm,
-                &swiglu,
-                &attention,
-                &vector,
-                &cuda_stream,
-                &host_tokens,
-                args.max_tokens,
-                &prefill,
-                args.bench_prefill,
-                args.bench_repeat.max(1),
-            )
-            .map_err(|error| {
-                format!("Prompt '{label}' failed on backend '{backend_name}': {error}")
-            })?;
-            outcomes.push(outcome);
+        let mut attention_results = Vec::new();
+        for &attention_mode in &prefill_attention_modes {
+            attention.set_prefill_backend(attention_mode);
+            let mut outcomes = Vec::with_capacity(backends.len());
+            for &(backend_name, linear) in &backends {
+                let outcome = run_backend(
+                    backend_name,
+                    label,
+                    &model,
+                    linear,
+                    &tokenizer,
+                    &argmax,
+                    &rmsnorm,
+                    &swiglu,
+                    &attention,
+                    &vector,
+                    &cuda_stream,
+                    &host_tokens,
+                    args.max_tokens,
+                    &prefill,
+                    args.bench_prefill,
+                    args.bench_repeat.max(1),
+                )
+                .map_err(|error| {
+                    format!("Prompt '{label}' failed on backend '{backend_name}': {error}")
+                })?;
+                outcomes.push(outcome);
+            }
+            print_backend_comparison(&outcomes);
+            attention_results.push((attention_mode, outcomes));
         }
-        print_backend_comparison(&outcomes);
+        if prefill_attention_modes.len() > 1 {
+            print_attention_ab_comparison(&attention_results);
+        }
     }
 
     if !args.request_batch_sizes.is_empty() {
@@ -712,6 +819,29 @@ fn tokenize_prompt(tokenizer: &Tokenizer, prompt: &str) -> Result<Vec<usize>, St
     Ok(ids.iter().map(|&t| t as usize).collect())
 }
 
+fn synthetic_context_for_tokens(tokenizer: &Tokenizer, target: usize) -> Result<String, String> {
+    let mut body = "test ".repeat(target);
+    for _ in 0..128 {
+        let actual = tokenize_prompt(tokenizer, &body)?.len();
+        if actual == target {
+            return Ok(body);
+        }
+        if actual > target {
+            let Some(prefix) = body.strip_suffix("test ") else {
+                return Err(format!(
+                    "Cannot construct a {target}-token synthetic context"
+                ));
+            };
+            body = prefix.to_owned();
+        } else {
+            body.push_str("test ");
+        }
+    }
+    Err(format!(
+        "Could not make a prompt exactly {target} tokens long after 128 adjustments"
+    ))
+}
+
 /// Run one linear backend over shared `host_tokens`: prefill (using
 /// `prefill_mode` / optional micro-bench) then greedy decode. Prints the
 /// backend's own output and timing and returns everything needed to compare
@@ -789,7 +919,31 @@ fn run_backend<M: ModelBackend>(
     };
 
     let mut cache;
-    let (prefill_time, mut next_token, prefill_logits) = if bench_prefill {
+    let (prefill_time, mut next_token, prefill_logits) = if bench_prefill
+        && label.starts_with("Synthetic ")
+    {
+        // Long-context comparisons focus on the attention path. Avoid the
+        // token-at-a-time decode loop here; at 8K it would dominate the
+        // experiment and obscure the batched prefill comparison.
+        let mut cache_gemm = model.new_cache(stream)?;
+        let (logits, _) = prefill_batched(&mut cache_gemm, true)?;
+        let host = stream
+            .clone_dtoh(&logits)
+            .map_err(|e| format!("Long-context prefill D2H failed: {e}"))?;
+        let mut dts = Vec::with_capacity(bench_repeat);
+        for _ in 0..bench_repeat {
+            dts.push(prefill_batched(&mut cache_gemm, true)?.1);
+        }
+        let elapsed = median_of(dts);
+        println!(
+            "[{backend}] Long-context GEMM+attention prefill ({} tokens, median of {}): {:.2?}",
+            host_tokens.len(),
+            bench_repeat,
+            elapsed
+        );
+        cache = cache_gemm;
+        (elapsed, select_token(argmax, stream, &logits)?, host)
+    } else if bench_prefill {
         let reps = bench_repeat;
         // One cache per path, reused for the logits/diff run, the timed reps,
         // and then decode. Prefill rewrites rows `[0, prompt)` in place, so no
@@ -1099,6 +1253,57 @@ fn print_backend_comparison(outcomes: &[PromptOutcome]) {
                 &base.name,
                 &other.name
             )
+        );
+    }
+}
+
+fn print_attention_ab_comparison(results: &[(PrefillAttentionBackend, Vec<PromptOutcome>)]) {
+    let Some((_, flash)) = results
+        .iter()
+        .find(|(backend, _)| *backend == PrefillAttentionBackend::Flash)
+    else {
+        return;
+    };
+    let Some((_, cutlass)) = results
+        .iter()
+        .find(|(backend, _)| *backend == PrefillAttentionBackend::Cutlass)
+    else {
+        return;
+    };
+    println!("\n[FP16 prefill attention A/B] FlashAttention vs CUTLASS");
+    println!(
+        "| Linear backend | Flash prefill | CUTLASS prefill | Flash/CUTLASS | Max logit diff | Token agreement |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|");
+    for flash_run in flash {
+        let Some(cutlass_run) = cutlass.iter().find(|run| run.name == flash_run.name) else {
+            continue;
+        };
+        let ratio =
+            flash_run.prefill_time.as_secs_f64() / cutlass_run.prefill_time.as_secs_f64().max(1e-9);
+        let agreement = if flash_run.tokens == cutlass_run.tokens {
+            format!(
+                "identical ({}/{})",
+                flash_run.tokens.len(),
+                cutlass_run.tokens.len()
+            )
+        } else {
+            let first_difference = flash_run
+                .tokens
+                .iter()
+                .zip(&cutlass_run.tokens)
+                .position(|(left, right)| left != right)
+                .unwrap_or_else(|| flash_run.tokens.len().min(cutlass_run.tokens.len()));
+            format!("diverge at token {first_difference}")
+        };
+        println!(
+            "| {} | {:.2?} | {:.2?} | {:.2}x | {:.3e} | {} |",
+            flash_run.name,
+            flash_run.prefill_time,
+            cutlass_run.prefill_time,
+            ratio,
+            max_abs_diff(&flash_run.prefill_logits, &cutlass_run.prefill_logits),
+            agreement,
         );
     }
 }

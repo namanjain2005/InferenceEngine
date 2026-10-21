@@ -288,19 +288,57 @@ impl KVCacheStrategy for NaiveKVCacheStrategy {
             shape.num_layers,
             initial_capacity,
             shape.kv_dim,
+            KVCacheDType::F32,
         )?))
     }
 }
 
+/// Contiguous cache storing rounded IEEE FP16 K/V values.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct F16KVCacheStrategy;
+
+impl KVCacheStrategy for F16KVCacheStrategy {
+    fn name(&self) -> &'static str {
+        "naive-f16"
+    }
+
+    fn new(
+        &self,
+        stream: &Arc<CudaStream>,
+        shape: KVCacheShape,
+        initial_capacity: usize,
+    ) -> Result<Box<dyn KVCacheState>, String> {
+        Ok(Box::new(NaiveKVCache::new(
+            stream,
+            shape.num_layers,
+            initial_capacity,
+            shape.kv_dim,
+            KVCacheDType::F16,
+        )?))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KVCacheDType {
+    F32,
+    F16,
+}
+
 struct LayerKVCache {
-    k: CudaSlice<f32>,
-    v: CudaSlice<f32>,
+    k: KVBuffer,
+    v: KVBuffer,
+}
+
+enum KVBuffer {
+    F32(CudaSlice<f32>),
+    F16(CudaSlice<u16>),
 }
 
 struct NaiveKVCache {
     layers: Vec<LayerKVCache>,
     capacity: usize,
     kv_dim: usize,
+    dtype: KVCacheDType,
 }
 
 impl NaiveKVCache {
@@ -309,6 +347,7 @@ impl NaiveKVCache {
         num_layers: usize,
         capacity: usize,
         kv_dim: usize,
+        dtype: KVCacheDType,
     ) -> Result<Self, String> {
         if num_layers == 0 || capacity == 0 || kv_dim == 0 {
             return Err("KV cache layers, capacity, and dimension must be non-zero".into());
@@ -318,18 +357,38 @@ impl NaiveKVCache {
             .ok_or("KV cache size overflow")?;
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
-            let k = stream
-                .alloc_zeros::<f32>(len)
-                .map_err(|e| format!("Allocating GPU key cache failed: {e}"))?;
-            let v = stream
-                .alloc_zeros::<f32>(len)
-                .map_err(|e| format!("Allocating GPU value cache failed: {e}"))?;
+            let (k, v) =
+                match dtype {
+                    KVCacheDType::F32 => (
+                        KVBuffer::F32(
+                            stream
+                                .alloc_zeros::<f32>(len)
+                                .map_err(|e| format!("Allocating GPU key cache failed: {e}"))?,
+                        ),
+                        KVBuffer::F32(
+                            stream
+                                .alloc_zeros::<f32>(len)
+                                .map_err(|e| format!("Allocating GPU value cache failed: {e}"))?,
+                        ),
+                    ),
+                    KVCacheDType::F16 => {
+                        (
+                            KVBuffer::F16(stream.alloc_zeros::<u16>(len).map_err(|e| {
+                                format!("Allocating FP16 GPU key cache failed: {e}")
+                            })?),
+                            KVBuffer::F16(stream.alloc_zeros::<u16>(len).map_err(|e| {
+                                format!("Allocating FP16 GPU value cache failed: {e}")
+                            })?),
+                        )
+                    }
+                };
             layers.push(LayerKVCache { k, v });
         }
         Ok(Self {
             layers,
             capacity,
             kv_dim,
+            dtype,
         })
     }
 
@@ -386,22 +445,47 @@ impl KVCacheState for NaiveKVCache {
             .checked_mul(self.kv_dim)
             .ok_or("KV cache copy size overflow")?;
         for layer in &mut self.layers {
-            let mut k = stream
-                .alloc_zeros::<f32>(new_len)
-                .map_err(|e| format!("Growing GPU key cache failed: {e}"))?;
-            let mut v = stream
-                .alloc_zeros::<f32>(new_len)
-                .map_err(|e| format!("Growing GPU value cache failed: {e}"))?;
-            if copy_len > 0 {
-                stream
-                    .memcpy_dtod(&layer.k.slice(..copy_len), &mut k.slice_mut(..copy_len))
-                    .map_err(|e| format!("Copying existing key cache failed: {e}"))?;
-                stream
-                    .memcpy_dtod(&layer.v.slice(..copy_len), &mut v.slice_mut(..copy_len))
-                    .map_err(|e| format!("Copying existing value cache failed: {e}"))?;
+            match (&layer.k, &layer.v, self.dtype) {
+                (KVBuffer::F32(old_k), KVBuffer::F32(old_v), KVCacheDType::F32) => {
+                    let mut k = stream
+                        .alloc_zeros::<f32>(new_len)
+                        .map_err(|e| format!("Growing GPU key cache failed: {e}"))?;
+                    let mut v = stream
+                        .alloc_zeros::<f32>(new_len)
+                        .map_err(|e| format!("Growing GPU value cache failed: {e}"))?;
+                    if copy_len > 0 {
+                        stream
+                            .memcpy_dtod(&old_k.slice(..copy_len), &mut k.slice_mut(..copy_len))
+                            .map_err(|e| format!("Copying existing key cache failed: {e}"))?;
+                        stream
+                            .memcpy_dtod(&old_v.slice(..copy_len), &mut v.slice_mut(..copy_len))
+                            .map_err(|e| format!("Copying existing value cache failed: {e}"))?;
+                    }
+                    layer.k = KVBuffer::F32(k);
+                    layer.v = KVBuffer::F32(v);
+                }
+                (KVBuffer::F16(old_k), KVBuffer::F16(old_v), KVCacheDType::F16) => {
+                    let mut k = stream
+                        .alloc_zeros::<u16>(new_len)
+                        .map_err(|e| format!("Growing FP16 GPU key cache failed: {e}"))?;
+                    let mut v = stream
+                        .alloc_zeros::<u16>(new_len)
+                        .map_err(|e| format!("Growing FP16 GPU value cache failed: {e}"))?;
+                    if copy_len > 0 {
+                        stream
+                            .memcpy_dtod(&old_k.slice(..copy_len), &mut k.slice_mut(..copy_len))
+                            .map_err(|e| format!("Copying existing FP16 key cache failed: {e}"))?;
+                        stream
+                            .memcpy_dtod(&old_v.slice(..copy_len), &mut v.slice_mut(..copy_len))
+                            .map_err(|e| {
+                                format!("Copying existing FP16 value cache failed: {e}")
+                            })?;
+                    }
+                    layer.k = KVBuffer::F16(k);
+                    layer.v = KVBuffer::F16(v);
+                }
+                _ => return Err("KV cache key/value storage dtype mismatch".into()),
             }
-            layer.k = k;
-            layer.v = v;
         }
         self.capacity = new_capacity;
         Ok(())
@@ -418,15 +502,15 @@ impl KVCacheState for NaiveKVCache {
     ) -> Result<(), String> {
         let kv_dim = self.kv_dim;
         let cache = self.layer_mut(layer)?;
-        vector.append_cache(
-            stream,
-            key,
-            value,
-            &mut cache.k,
-            &mut cache.v,
-            position,
-            kv_dim,
-        )
+        match (&mut cache.k, &mut cache.v) {
+            (KVBuffer::F32(k), KVBuffer::F32(v)) => {
+                vector.append_cache(stream, key, value, k, v, position, kv_dim)
+            }
+            (KVBuffer::F16(k), KVBuffer::F16(v)) => {
+                vector.append_cache_batch_f16(stream, key, value, k, v, position, 1, kv_dim)
+            }
+            _ => Err("KV cache key/value storage dtype mismatch".into()),
+        }
     }
 
     fn append_prompt(
@@ -441,16 +525,22 @@ impl KVCacheState for NaiveKVCache {
     ) -> Result<(), String> {
         let kv_dim = self.kv_dim;
         let cache = self.layer_mut(layer)?;
-        vector.append_cache_batch(
-            stream,
-            keys,
-            values,
-            &mut cache.k,
-            &mut cache.v,
-            start_position,
-            batch,
-            kv_dim,
-        )
+        match (&mut cache.k, &mut cache.v) {
+            (KVBuffer::F32(k), KVBuffer::F32(v)) => {
+                vector.append_cache_batch(stream, keys, values, k, v, start_position, batch, kv_dim)
+            }
+            (KVBuffer::F16(k), KVBuffer::F16(v)) => vector.append_cache_batch_f16(
+                stream,
+                keys,
+                values,
+                k,
+                v,
+                start_position,
+                batch,
+                kv_dim,
+            ),
+            _ => Err("KV cache key/value storage dtype mismatch".into()),
+        }
     }
 
     fn attend_decode(
@@ -465,16 +555,29 @@ impl KVCacheState for NaiveKVCache {
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String> {
         let cache = self.layer(layer)?;
-        attention.forward(
-            stream,
-            query,
-            &cache.k,
-            &cache.v,
-            sequence_length,
-            num_query_heads,
-            num_kv_heads,
-            head_dim,
-        )
+        match (&cache.k, &cache.v) {
+            (KVBuffer::F32(k), KVBuffer::F32(v)) => attention.forward(
+                stream,
+                query,
+                k,
+                v,
+                sequence_length,
+                num_query_heads,
+                num_kv_heads,
+                head_dim,
+            ),
+            (KVBuffer::F16(k), KVBuffer::F16(v)) => attention.forward_f16(
+                stream,
+                query,
+                k,
+                v,
+                sequence_length,
+                num_query_heads,
+                num_kv_heads,
+                head_dim,
+            ),
+            _ => Err("KV cache key/value storage dtype mismatch".into()),
+        }
     }
 
     fn attend_prefill(
@@ -490,16 +593,30 @@ impl KVCacheState for NaiveKVCache {
         stream: &Arc<CudaStream>,
     ) -> Result<CudaSlice<f32>, String> {
         let cache = self.layer(layer)?;
-        attention.forward_prefill(
-            stream,
-            query,
-            &cache.k,
-            &cache.v,
-            start_position,
-            batch,
-            num_query_heads,
-            num_kv_heads,
-            head_dim,
-        )
+        match (&cache.k, &cache.v) {
+            (KVBuffer::F32(k), KVBuffer::F32(v)) => attention.forward_prefill(
+                stream,
+                query,
+                k,
+                v,
+                start_position,
+                batch,
+                num_query_heads,
+                num_kv_heads,
+                head_dim,
+            ),
+            (KVBuffer::F16(k), KVBuffer::F16(v)) => attention.forward_prefill_f16(
+                stream,
+                query,
+                k,
+                v,
+                start_position,
+                batch,
+                num_query_heads,
+                num_kv_heads,
+                head_dim,
+            ),
+            _ => Err("KV cache key/value storage dtype mismatch".into()),
+        }
     }
 }

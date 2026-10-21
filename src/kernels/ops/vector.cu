@@ -142,6 +142,24 @@ extern "C" __global__ void append_cache_batch(
     }
 }
 
+extern "C" __global__ void append_cache_batch_f16(
+    const float* k, const float* v, unsigned short* k_cache, unsigned short* v_cache,
+    int start_pos, int batch, int kv_dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = batch * kv_dim;
+    if (idx < total) {
+        int row = idx / kv_dim;
+        int col = idx % kv_dim;
+        int cache_idx = (start_pos + row) * kv_dim + col;
+        unsigned short key_half;
+        unsigned short value_half;
+        asm("cvt.rn.f16.f32 %0, %1;" : "=h"(key_half) : "f"(k[idx]));
+        asm("cvt.rn.f16.f32 %0, %1;" : "=h"(value_half) : "f"(v[idx]));
+        k_cache[cache_idx] = key_half;
+        v_cache[cache_idx] = value_half;
+    }
+}
+
 extern "C" __global__ void gather_row(
     const float* input, float* out, int row, int batch, int width) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;

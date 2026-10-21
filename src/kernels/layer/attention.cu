@@ -5,12 +5,36 @@
 // needed.
 constexpr int WARP_SIZE = 32;
 
-template <int TILE_SIZE>
+template <typename T>
+__device__ float attention_to_float(T value) {
+    return static_cast<float>(value);
+}
+
+template <>
+__device__ float attention_to_float<unsigned short>(unsigned short value) {
+    float converted;
+    asm("cvt.f32.f16 %0, %1;" : "=f"(converted) : "h"(value));
+    return converted;
+}
+
+template <typename T>
+__device__ T attention_from_float(float value) {
+    return static_cast<T>(value);
+}
+
+template <>
+__device__ unsigned short attention_from_float<unsigned short>(float value) {
+    unsigned short converted;
+    asm("cvt.rn.f16.f32 %0, %1;" : "=h"(converted) : "f"(value));
+    return converted;
+}
+
+template <int TILE_SIZE, typename T>
 __device__ void attention_flash_one_query(
-    const float* __restrict__ q,
-    const float* __restrict__ k_cache,
-    const float* __restrict__ v_cache,
-    float*       __restrict__ output,
+    const T* __restrict__ q,
+    const T* __restrict__ k_cache,
+    const T* __restrict__ v_cache,
+    T*       __restrict__ output,
     int query_row,
     int query_head,
     int num_query_heads,
@@ -31,7 +55,7 @@ __device__ void attention_flash_one_query(
     const int warps_per_block = blockDim.x / WARP_SIZE;
     const int kv_head = query_head / heads_per_kv;
     const int row_offset = query_row * num_query_heads * head_dim;
-    const float* q_head = q + row_offset + query_head * head_dim;
+    const T* q_head = q + row_offset + query_head * head_dim;
     float running_max = -1.0e30f;
     float running_sum = 0.0f;
 
@@ -46,9 +70,9 @@ __device__ void attention_flash_one_query(
         // A warp computes each Q.K score, reducing over contiguous dimensions.
         for (int j = warp; j < tile_len; j += warps_per_block) {
             float dot = 0.0f;
-            const float* k_row = k_cache + (tile_start + j) * kv_dim + kv_head * head_dim;
+            const T* k_row = k_cache + (tile_start + j) * kv_dim + kv_head * head_dim;
             for (int d = lane; d < head_dim; d += WARP_SIZE)
-                dot = fmaf(q_head[d], k_row[d], dot);
+                dot = fmaf(attention_to_float(q_head[d]), attention_to_float(k_row[d]), dot);
             for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
                 dot += __shfl_down_sync(0xffffffff, dot, offset);
             if (lane == 0)
@@ -100,7 +124,7 @@ __device__ void attention_flash_one_query(
             for (int j = 0; j < tile_len; ++j)
                 acc = fmaf(
                     tile_scale * scores[j],
-                    v_cache[(tile_start + j) * kv_dim + kv_head * head_dim + d],
+                    attention_to_float(v_cache[(tile_start + j) * kv_dim + kv_head * head_dim + d]),
                     acc);
             output_acc[d] = acc;
         }
@@ -112,7 +136,7 @@ __device__ void attention_flash_one_query(
 
     const int output_offset = query_row * num_query_heads * head_dim + query_head * head_dim;
     for (int d = tid; d < head_dim; d += blockDim.x)
-        output[output_offset + d] = output_acc[d] / running_sum;
+        output[output_offset + d] = attention_from_float<T>(output_acc[d] / running_sum);
 }
 
 #define DEFINE_FLASH_DECODE(TILE) \
@@ -122,7 +146,7 @@ extern "C" __global__ void attention_decode_flash_##TILE( \
 { \
     extern __shared__ float shared[]; \
     const int h = blockIdx.x; \
-    attention_flash_one_query<TILE>(q, k_cache, v_cache, output, 0, h, (int)gridDim.x, \
+    attention_flash_one_query<TILE, float>(q, k_cache, v_cache, output, 0, h, (int)gridDim.x, \
         seq_len, kv_dim, head_dim, heads_per_kv, scale, shared); \
 }
 
@@ -137,7 +161,7 @@ extern "C" __global__ void attention_prefill_flash_##TILE( \
     const int h = blockIdx.y; \
     if (row >= batch) return; \
     const int seq_len = start_pos + row + 1; \
-    attention_flash_one_query<TILE>(q, k_cache, v_cache, output, row, h, num_q_heads, \
+    attention_flash_one_query<TILE, float>(q, k_cache, v_cache, output, row, h, num_q_heads, \
         seq_len, kv_dim, head_dim, heads_per_kv, scale, shared); \
 }
 
@@ -155,3 +179,62 @@ DEFINE_FLASH_PREFILL(32)
 DEFINE_FLASH_PREFILL(16)
 DEFINE_FLASH_PREFILL(8)
 DEFINE_FLASH_PREFILL(4)
+
+#define DEFINE_FLASH_DECODE_F16(TILE) \
+extern "C" __global__ void attention_decode_flash_f16_##TILE( \
+    const unsigned short* q, const unsigned short* k_cache, const unsigned short* v_cache, unsigned short* output, \
+    int seq_len, int kv_dim, int head_dim, int heads_per_kv, float scale) \
+{ \
+    extern __shared__ float shared[]; \
+    const int h = blockIdx.x; \
+    attention_flash_one_query<TILE, unsigned short>(q, k_cache, v_cache, output, 0, h, (int)gridDim.x, \
+        seq_len, kv_dim, head_dim, heads_per_kv, scale, shared); \
+}
+
+#define DEFINE_FLASH_PREFILL_F16(TILE) \
+extern "C" __global__ void attention_prefill_flash_f16_##TILE( \
+    const unsigned short* q, const unsigned short* k_cache, const unsigned short* v_cache, unsigned short* output, \
+    int start_pos, int batch, int num_q_heads, int kv_dim, int head_dim, \
+    int heads_per_kv, float scale) \
+{ \
+    extern __shared__ float shared[]; \
+    const int row = blockIdx.x; \
+    const int h = blockIdx.y; \
+    if (row >= batch) return; \
+    const int seq_len = start_pos + row + 1; \
+    attention_flash_one_query<TILE, unsigned short>(q, k_cache, v_cache, output, row, h, num_q_heads, \
+        seq_len, kv_dim, head_dim, heads_per_kv, scale, shared); \
+}
+
+DEFINE_FLASH_DECODE_F16(256)
+DEFINE_FLASH_DECODE_F16(128)
+DEFINE_FLASH_DECODE_F16(64)
+DEFINE_FLASH_DECODE_F16(32)
+DEFINE_FLASH_DECODE_F16(16)
+DEFINE_FLASH_DECODE_F16(8)
+DEFINE_FLASH_DECODE_F16(4)
+DEFINE_FLASH_PREFILL_F16(256)
+DEFINE_FLASH_PREFILL_F16(128)
+DEFINE_FLASH_PREFILL_F16(64)
+DEFINE_FLASH_PREFILL_F16(32)
+DEFINE_FLASH_PREFILL_F16(16)
+DEFINE_FLASH_PREFILL_F16(8)
+DEFINE_FLASH_PREFILL_F16(4)
+
+extern "C" __global__ void cast_f32_to_f16(const float* input, unsigned short* output, int n) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        unsigned short converted;
+        asm("cvt.rn.f16.f32 %0, %1;" : "=h"(converted) : "f"(input[idx]));
+        output[idx] = converted;
+    }
+}
+
+extern "C" __global__ void cast_f16_to_f32(const unsigned short* input, float* output, int n) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        float converted;
+        asm("cvt.f32.f16 %0, %1;" : "=f"(converted) : "h"(input[idx]));
+        output[idx] = converted;
+    }
+}

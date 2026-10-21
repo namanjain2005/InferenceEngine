@@ -1,8 +1,9 @@
 use cudarc::driver::{
     CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
 };
-use cudarc::nvrtc::compile_ptx;
+use cudarc::nvrtc::{Ptx, compile_ptx};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 const RMS_NORM_CUDA: &str = include_str!("RMSNorm.cu");
 const SWIGLU_CUDA: &str = include_str!("SWiGLU.cu");
@@ -198,6 +199,21 @@ pub struct AttentionKernel {
     prefill_flash_16: CudaFunction,
     prefill_flash_8: CudaFunction,
     prefill_flash_4: CudaFunction,
+    decode_flash_f16: [CudaFunction; 7],
+    prefill_flash_f16: [CudaFunction; 7],
+    cast_f32_to_f16: CudaFunction,
+    cast_f16_to_f32: CudaFunction,
+    _cutlass_module: Arc<CudaModule>,
+    cutlass_prefill_f16: CudaFunction,
+    cutlass_shared_bytes: u32,
+    prefill_backend: AtomicU8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PrefillAttentionBackend {
+    Flash = 0,
+    Cutlass = 1,
 }
 
 pub struct ArgmaxKernel {
@@ -285,7 +301,7 @@ impl ArgmaxKernel {
 }
 
 impl AttentionKernel {
-    pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
+    pub fn new(context: &Arc<CudaContext>, stream: &Arc<CudaStream>) -> Result<Self, String> {
         let (module, decode_flash_256) =
             load_kernel(context, ATTENTION_CUDA, "attention_decode_flash_256")?;
         let load = |name: &str| {
@@ -306,6 +322,53 @@ impl AttentionKernel {
         let prefill_flash_16 = load("attention_prefill_flash_16")?;
         let prefill_flash_8 = load("attention_prefill_flash_8")?;
         let prefill_flash_4 = load("attention_prefill_flash_4")?;
+        let load_f16 = |prefix: &str| -> Result<Vec<CudaFunction>, String> {
+            [256, 128, 64, 32, 16, 8, 4]
+                .into_iter()
+                .map(|tile| load(&format!("{prefix}_{tile}")))
+                .collect()
+        };
+        let decode_flash_f16 = load_f16("attention_decode_flash_f16")?
+            .try_into()
+            .map_err(|_| "Unexpected FP16 decode kernel count")?;
+        let prefill_flash_f16 = load_f16("attention_prefill_flash_f16")?
+            .try_into()
+            .map_err(|_| "Unexpected FP16 prefill kernel count")?;
+        let cast_f32_to_f16 = load("cast_f32_to_f16")?;
+        let cast_f16_to_f32 = load("cast_f16_to_f32")?;
+
+        let cutlass_ptx = Ptx::from_src(include_str!(env!("CUTLASS_ATTENTION_PTX")));
+        let cutlass_module = context
+            .load_module(cutlass_ptx)
+            .map_err(|e| format!("Loading CUTLASS attention PTX failed: {e}"))?;
+        let cutlass_prefill_f16 = cutlass_module
+            .load_function("cutlass_attention_prefill_f16")
+            .map_err(|e| format!("Loading CUTLASS prefill kernel failed: {e}"))?;
+        let shared_symbol = cutlass_module
+            .get_global("cutlass_attention_shared_bytes", stream)
+            .map_err(|e| format!("Reading CUTLASS shared-memory size failed: {e}"))?;
+        let shared_bytes_raw = stream
+            .clone_dtoh(&shared_symbol)
+            .map_err(|e| format!("Copying CUTLASS shared-memory size failed: {e}"))?;
+        if shared_bytes_raw.len() != std::mem::size_of::<u32>() {
+            return Err(format!(
+                "CUTLASS shared-memory symbol has {} bytes, expected {}",
+                shared_bytes_raw.len(),
+                std::mem::size_of::<u32>()
+            ));
+        }
+        let cutlass_shared_bytes = u32::from_ne_bytes(
+            shared_bytes_raw
+                .try_into()
+                .map_err(|_| "Invalid CUTLASS shared-memory size symbol")?,
+        );
+        cutlass_prefill_f16
+            .set_attribute(
+                cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                i32::try_from(cutlass_shared_bytes)
+                    .map_err(|_| "CUTLASS shared memory exceeds CUDA function limit")?,
+            )
+            .map_err(|e| format!("Setting CUTLASS dynamic shared-memory size failed: {e}"))?;
         Ok(Self {
             _module: module,
             decode_flash_256,
@@ -322,7 +385,26 @@ impl AttentionKernel {
             prefill_flash_16,
             prefill_flash_8,
             prefill_flash_4,
+            decode_flash_f16,
+            prefill_flash_f16,
+            cast_f32_to_f16,
+            cast_f16_to_f32,
+            _cutlass_module: cutlass_module,
+            cutlass_prefill_f16,
+            cutlass_shared_bytes,
+            prefill_backend: AtomicU8::new(PrefillAttentionBackend::Flash as u8),
         })
+    }
+
+    pub fn set_prefill_backend(&self, backend: PrefillAttentionBackend) {
+        self.prefill_backend.store(backend as u8, Ordering::Relaxed);
+    }
+
+    pub fn prefill_backend(&self) -> PrefillAttentionBackend {
+        match self.prefill_backend.load(Ordering::Relaxed) {
+            1 => PrefillAttentionBackend::Cutlass,
+            _ => PrefillAttentionBackend::Flash,
+        }
     }
 
     fn tile_size(head_dim: usize) -> Result<usize, String> {
@@ -375,6 +457,82 @@ impl AttentionKernel {
             4 => &self.prefill_flash_4,
             _ => unreachable!("tile size selected by tile_size"),
         }
+    }
+
+    fn decode_function_f16(&self, tile_size: usize) -> &CudaFunction {
+        let index = match tile_size {
+            256 => 0,
+            128 => 1,
+            64 => 2,
+            32 => 3,
+            16 => 4,
+            8 => 5,
+            4 => 6,
+            _ => unreachable!("tile size selected by tile_size"),
+        };
+        &self.decode_flash_f16[index]
+    }
+
+    fn prefill_function_f16(&self, tile_size: usize) -> &CudaFunction {
+        let index = match tile_size {
+            256 => 0,
+            128 => 1,
+            64 => 2,
+            32 => 3,
+            16 => 4,
+            8 => 5,
+            4 => 6,
+            _ => unreachable!("tile size selected by tile_size"),
+        };
+        &self.prefill_flash_f16[index]
+    }
+
+    fn cast_query_f16(
+        &self,
+        stream: &Arc<CudaStream>,
+        input: &CudaSlice<f32>,
+    ) -> Result<CudaSlice<u16>, String> {
+        let n = checked_i32(input.len(), "FP16 attention cast length")?;
+        let mut output = stream
+            .alloc_zeros::<u16>(input.len())
+            .map_err(|e| format!("Allocating FP16 attention query failed: {e}"))?;
+        let mut launch = stream.launch_builder(&self.cast_f32_to_f16);
+        launch.arg(input);
+        launch.arg(&mut output);
+        launch.arg(&n);
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: ((n as u32).div_ceil(THREADS), 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .map_err(|e| format!("Casting attention query to FP16 failed: {e}"))?;
+        Ok(output)
+    }
+
+    fn cast_output_f32(
+        &self,
+        stream: &Arc<CudaStream>,
+        input: &CudaSlice<u16>,
+    ) -> Result<CudaSlice<f32>, String> {
+        let n = checked_i32(input.len(), "FP16 attention output cast length")?;
+        let mut output = stream
+            .alloc_zeros::<f32>(input.len())
+            .map_err(|e| format!("Allocating FP32 attention output failed: {e}"))?;
+        let mut launch = stream.launch_builder(&self.cast_f16_to_f32);
+        launch.arg(input);
+        launch.arg(&mut output);
+        launch.arg(&n);
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: ((n as u32).div_ceil(THREADS), 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .map_err(|e| format!("Casting attention output to FP32 failed: {e}"))?;
+        Ok(output)
     }
 
     pub fn forward(
@@ -446,6 +604,75 @@ impl AttentionKernel {
         unsafe { launch.launch(cfg) }
             .map_err(|e| format!("Launching attention CUDA kernel failed: {e}"))?;
         Ok(output_dev)
+    }
+
+    /// FlashAttention decode using FP16 Q/K/V storage and FP32 softmax/output
+    /// accumulation. The returned vector is converted back to FP32 for the
+    /// model's existing output projection.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_f16(
+        &self,
+        stream: &Arc<CudaStream>,
+        q: &CudaSlice<f32>,
+        k_cache: &CudaSlice<u16>,
+        v_cache: &CudaSlice<u16>,
+        seq_len: usize,
+        num_q_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+    ) -> Result<CudaSlice<f32>, String> {
+        if seq_len == 0 || num_q_heads == 0 || num_kv_heads == 0 || head_dim == 0 {
+            return Err("FP16 attention dimensions must be non-zero".into());
+        }
+        if num_q_heads % num_kv_heads != 0 {
+            return Err(
+                "Attention query head count must be divisible by key/value head count".into(),
+            );
+        }
+        let kv_dim = num_kv_heads
+            .checked_mul(head_dim)
+            .ok_or("Attention KV dimension overflow")?;
+        let q_len = num_q_heads
+            .checked_mul(head_dim)
+            .ok_or("Attention query size overflow")?;
+        let cache_len = seq_len
+            .checked_mul(kv_dim)
+            .ok_or("Attention cache size overflow")?;
+        if q.len() != q_len || k_cache.len() < cache_len || v_cache.len() < cache_len {
+            return Err("FP16 attention tensor/cache shape mismatch".into());
+        }
+        let query = self.cast_query_f16(stream, q)?;
+        let mut output_half = stream
+            .alloc_zeros::<u16>(q_len)
+            .map_err(|e| format!("Allocating FP16 attention output failed: {e}"))?;
+        let (seq, kv, hd, hpkv) = (
+            checked_i32(seq_len, "Attention sequence length")?,
+            checked_i32(kv_dim, "Attention KV dimension")?,
+            checked_i32(head_dim, "Attention head dimension")?,
+            checked_i32(num_q_heads / num_kv_heads, "Attention heads per KV head")?,
+        );
+        let tile_size = Self::tile_size(head_dim)?;
+        let shared_mem_bytes = Self::shared_bytes(tile_size, head_dim)?;
+        let scale = 1.0f32 / (head_dim as f32).sqrt();
+        let mut launch = stream.launch_builder(self.decode_function_f16(tile_size));
+        launch.arg(&query);
+        launch.arg(k_cache);
+        launch.arg(v_cache);
+        launch.arg(&mut output_half);
+        launch.arg(&seq);
+        launch.arg(&kv);
+        launch.arg(&hd);
+        launch.arg(&hpkv);
+        launch.arg(&scale);
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: (num_q_heads as u32, 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes,
+            })
+        }
+        .map_err(|e| format!("Launching FP16 FlashAttention decode failed: {e}"))?;
+        self.cast_output_f32(stream, &output_half)
     }
 
     /// Tiled causal prefill attention. `q` is `[batch, q_heads*head_dim]`
@@ -527,6 +754,114 @@ impl AttentionKernel {
             .map_err(|e| format!("Launching prefill attention kernel failed: {e}"))?;
         Ok(output_dev)
     }
+
+    /// Causal prefill over an FP16 KV cache. FlashAttention and CUTLASS both
+    /// consume FP16 Q/K/V, accumulate online softmax and output in FP32/FP32,
+    /// then round their output to FP16 before the common FP32 model interface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_prefill_f16(
+        &self,
+        stream: &Arc<CudaStream>,
+        q: &CudaSlice<f32>,
+        k_cache: &CudaSlice<u16>,
+        v_cache: &CudaSlice<u16>,
+        start_pos: usize,
+        batch: usize,
+        num_q_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+    ) -> Result<CudaSlice<f32>, String> {
+        if batch == 0 || num_q_heads == 0 || num_kv_heads == 0 || head_dim == 0 {
+            return Err("FP16 prefill attention dimensions must be non-zero".into());
+        }
+        if num_q_heads % num_kv_heads != 0 {
+            return Err(
+                "Attention query head count must be divisible by key/value head count".into(),
+            );
+        }
+        let kv_dim = num_kv_heads
+            .checked_mul(head_dim)
+            .ok_or("Attention KV dimension overflow")?;
+        let q_len = batch
+            .checked_mul(num_q_heads)
+            .and_then(|n| n.checked_mul(head_dim))
+            .ok_or("Prefill attention query size overflow")?;
+        let need = start_pos
+            .checked_add(batch)
+            .and_then(|n| n.checked_mul(kv_dim))
+            .ok_or("Prefill attention cache size overflow")?;
+        if q.len() != q_len || k_cache.len() < need || v_cache.len() < need {
+            return Err(format!(
+                "FP16 prefill attention shape mismatch: q {}, k {}, v {}; expected {q_len}, {need}, {need}",
+                q.len(),
+                k_cache.len(),
+                v_cache.len()
+            ));
+        }
+        let query = self.cast_query_f16(stream, q)?;
+        let mut output_half = stream
+            .alloc_zeros::<u16>(q_len)
+            .map_err(|e| format!("Allocating FP16 prefill attention output failed: {e}"))?;
+        let (sp, b, nqh, kv, hd, hpkv) = (
+            checked_i32(start_pos, "Prefill start")?,
+            checked_i32(batch, "Prefill batch")?,
+            checked_i32(num_q_heads, "Attention query heads")?,
+            checked_i32(kv_dim, "Attention KV dimension")?,
+            checked_i32(head_dim, "Attention head dimension")?,
+            checked_i32(num_q_heads / num_kv_heads, "Attention heads per KV head")?,
+        );
+        let backend = self.prefill_backend();
+        if backend == PrefillAttentionBackend::Cutlass {
+            let n_kv_heads = checked_i32(num_kv_heads, "Attention KV heads")?;
+            let mut output_accum = stream
+                .alloc_zeros::<f32>(q_len)
+                .map_err(|e| format!("Allocating CUTLASS output accumulator failed: {e}"))?;
+            let mut launch = stream.launch_builder(&self.cutlass_prefill_f16);
+            launch.arg(&query);
+            launch.arg(k_cache);
+            launch.arg(v_cache);
+            launch.arg(&mut output_half);
+            launch.arg(&mut output_accum);
+            launch.arg(&sp);
+            launch.arg(&b);
+            launch.arg(&nqh);
+            launch.arg(&n_kv_heads);
+            launch.arg(&hd);
+            unsafe {
+                launch.launch(LaunchConfig {
+                    grid_dim: (batch.div_ceil(32) as u32, num_q_heads as u32, 1),
+                    block_dim: (32, 2, 1),
+                    shared_mem_bytes: self.cutlass_shared_bytes,
+                })
+            }
+            .map_err(|e| format!("Launching CUTLASS FP16 prefill attention failed: {e}"))?;
+        } else {
+            let tile_size = Self::tile_size(head_dim)?;
+            let shared_mem_bytes = Self::shared_bytes(tile_size, head_dim)?;
+            let scale = 1.0f32 / (head_dim as f32).sqrt();
+            let mut launch = stream.launch_builder(self.prefill_function_f16(tile_size));
+            launch.arg(&query);
+            launch.arg(k_cache);
+            launch.arg(v_cache);
+            launch.arg(&mut output_half);
+            launch.arg(&sp);
+            launch.arg(&b);
+            launch.arg(&nqh);
+            launch.arg(&kv);
+            launch.arg(&hd);
+            launch.arg(&hpkv);
+            launch.arg(&scale);
+            unsafe {
+                launch.launch(LaunchConfig {
+                    grid_dim: (batch as u32, num_q_heads as u32, 1),
+                    block_dim: (THREADS, 1, 1),
+                    shared_mem_bytes,
+                })
+            }
+            .map_err(|e| format!("Launching FP16 FlashAttention prefill failed: {e}"))?;
+        }
+        self.cast_output_f32(stream, &output_half)
+    }
 }
 
 pub struct VectorKernels {
@@ -539,6 +874,7 @@ pub struct VectorKernels {
     rope_batch: CudaFunction,
     rope_batch_positions: CudaFunction,
     append_cache_batch: CudaFunction,
+    append_cache_batch_f16: CudaFunction,
     gather_row: CudaFunction,
 }
 
@@ -569,6 +905,9 @@ impl VectorKernels {
         let append_cache_batch = module
             .load_function("append_cache_batch")
             .map_err(|e| format!("Loading append_cache_batch failed: {e}"))?;
+        let append_cache_batch_f16 = module
+            .load_function("append_cache_batch_f16")
+            .map_err(|e| format!("Loading append_cache_batch_f16 failed: {e}"))?;
         let gather_row = module
             .load_function("gather_row")
             .map_err(|e| format!("Loading gather_row failed: {e}"))?;
@@ -582,6 +921,7 @@ impl VectorKernels {
             rope_batch,
             rope_batch_positions,
             append_cache_batch,
+            append_cache_batch_f16,
             gather_row,
         })
     }
@@ -1003,6 +1343,56 @@ impl VectorKernels {
             })
         }
         .map_err(|e| format!("Appending batched KV cache failed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn append_cache_batch_f16(
+        &self,
+        stream: &Arc<CudaStream>,
+        k: &CudaSlice<f32>,
+        v: &CudaSlice<f32>,
+        cache_k: &mut CudaSlice<u16>,
+        cache_v: &mut CudaSlice<u16>,
+        start_pos: usize,
+        batch: usize,
+        kv_dim: usize,
+    ) -> Result<(), String> {
+        let total = batch.checked_mul(kv_dim).ok_or("KV append size overflow")?;
+        let end = start_pos
+            .checked_add(batch)
+            .and_then(|rows| rows.checked_mul(kv_dim))
+            .ok_or("KV cache append range overflow")?;
+        if batch == 0
+            || kv_dim == 0
+            || k.len() != total
+            || v.len() != total
+            || end > cache_k.len()
+            || end > cache_v.len()
+        {
+            return Err("FP16 KV cache capacity or shape is invalid".into());
+        }
+        let (start, rows, dim, n) = (
+            checked_i32(start_pos, "KV cache position")?,
+            checked_i32(batch, "KV cache batch")?,
+            checked_i32(kv_dim, "KV dimension")?,
+            checked_i32(total, "KV append size")?,
+        );
+        let mut launch = stream.launch_builder(&self.append_cache_batch_f16);
+        launch.arg(k);
+        launch.arg(v);
+        launch.arg(cache_k);
+        launch.arg(cache_v);
+        launch.arg(&start);
+        launch.arg(&rows);
+        launch.arg(&dim);
+        unsafe {
+            launch.launch(LaunchConfig {
+                grid_dim: ((n as u32).div_ceil(THREADS), 1, 1),
+                block_dim: (THREADS, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .map_err(|e| format!("Launching FP16 KV cache append failed: {e}"))?;
         Ok(())
     }
 }

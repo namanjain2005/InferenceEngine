@@ -1,3 +1,6 @@
 mod kernels;
 
-pub use kernels::{ArgmaxKernel, AttentionKernel, RmsNormKernel, SwiGluKernel, VectorKernels};
+pub use kernels::{
+    ArgmaxKernel, AttentionKernel, PrefillAttentionBackend, RmsNormKernel, SwiGluKernel,
+    VectorKernels,
+};

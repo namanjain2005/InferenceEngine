@@ -618,3 +618,47 @@ runs, not an attention shared-memory launch failure. `cargo test --all-targets`
 passed after adding the expanded prompt file (2 library tests; binary and
 example targets passed with 0 tests). The 0.5B checkpoint is not available in
 the local model fixtures.
+
+## CUTLASS SM70 FP16 prefill attention prototype (2026-10-21)
+
+Commit summary: vendor and pin CUTLASS v3.9.2, precompile its fused
+online-softmax attention kernel for SM70, add a selectable CUTLASS causal
+prefill path beside the existing tiled FlashAttention kernel, and add an FP16
+Q/K/V plus KV-cache mode shared by both paths. QKV projection fusion was not
+implemented. Decode remains FlashAttention; in FP16 attention mode it consumes
+the FP16 cache and rounds its attention output to FP16 before conversion to the
+existing FP32 model interface.
+
+The A/B test runs both attention paths on the same prompt/model/linear backend
+with FP16 attention and cache. Full per-prompt values are archived in
+[`per_prompt_ab.csv`](benchmark-results/cutlass-prefill-2026-10-21/per_prompt_ab.csv)
+with raw logs in the adjacent directory. For the exact 1K/4K/8K tests, timing
+is the median of three synchronized full-model batched prefill runs after one
+untimed warmup. All nine completed exact-context cases on 1.5B, 3B, and 7B
+produced identical generated token IDs between FlashAttention and CUTLASS.
+The previous revision stored FP32 Q/K/V and KV cache, so its timings are not a
+fair baseline for this FP16 A/B and no cross-revision speedup is inferred.
+The measured ratios and per-case logit differences are in
+[`BENCHMARK.md`](BENCHMARK.md).
+
+Validation evidence:
+
+| Test | Result |
+|---|---|
+| `cargo test --all-targets` | Passed: 2 library tests; binary and example targets passed with 0 tests. |
+| `cargo build --release` | Passed; build-time NVCC generated the pinned CUTLASS PTX for `compute_70`. |
+| 1.5B and 3B BASE_PROMPTS suite | All 12 prompts completed with both attention paths and both linear backends; generated IDs matched per prompt. |
+| 7B BASE_PROMPTS suite | All 12 prompts completed separately on FlashAttention and CUTLASS with custom linear; decoded outputs matched. Combined `both` execution hit shared-GPU OOM at the 8K transition. |
+| Exact 1,024 / 4,096 / 8,192-token A/B | All nine model/context cases completed on 1.5B, 3B, and 7B. Each crossed the default 2,048-token KV-cache capacity at 4K/8K and grew successfully. |
+| 14B FP16 load | OOM uploading layer 28 MLP up-projection; no attention benchmark was reached. The resident-weight estimate was 28.96 GiB on a 32 GiB V100 already using about 13 GiB. |
+| Local 0.5B model | Not available. |
+
+Hardware was GPU 0, shared Tesla V100-SXM2-32GB, CUDA 12.4 / driver
+550.144.03. Absolute timings are noisy under shared load; the increasing
+speedup with context length is observed for full prefill and does not by itself
+classify either attention kernel as memory-bound. Nsight Compute profiling was
+attempted, but the driver returned `ERR_NVGPUCTRPERM` before profiling any
+kernels ([log](benchmark-results/cutlass-prefill-2026-10-21/ncu-flash-1k.log)).
+See
+[`BENCHMARK.md`](BENCHMARK.md) for the exact per-case values, commands, and
+limitations.

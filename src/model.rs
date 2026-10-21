@@ -7,7 +7,7 @@ use crate::safetensors::SafeTensors;
 use cudarc::driver::{CudaSlice, CudaStream};
 use std::sync::Arc;
 
-pub use crate::kv_cache::{DEFAULT_KV_CACHE_CAPACITY, KVCache, KVCacheConfig};
+pub use crate::kv_cache::{DEFAULT_KV_CACHE_CAPACITY, F16KVCacheStrategy, KVCache, KVCacheConfig};
 
 pub struct LayerWeights {
     input_layernorm: CudaSlice<f32>,
