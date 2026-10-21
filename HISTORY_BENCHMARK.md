@@ -1,11 +1,11 @@
 # Git history review and per-case benchmark
 
-Reviewed all refs through `c923c74` (2026-10-19): 39 reachable commits total,
-including the 34-commit `main` ancestry and the attention experiment branches.
-This file groups the larger changes, records which evidence exists for each
-group, and gives the latest complete per-prompt run. `BENCHMARK.md` remains the
-source for the historical prefill and backend comparison tables; it has
-prompt-by-prompt results for the 0.5B, 1.5B, and 3B models at those milestones.
+Reviewed the relevant attention, prefill, and benchmark history through
+`47960ee` (2026-10-20), including the attention experiment branches. This file
+groups the larger changes, records which evidence exists for each group, and
+gives the latest complete per-prompt run. `BENCHMARK.md` remains the source for
+the historical prefill and backend comparison tables; it has prompt-by-prompt
+results for the 0.5B, 1.5B, and 3B models at those milestones.
 
 ## Major changes in the history
 
@@ -482,6 +482,67 @@ prefill time, batch decode time, output length, and exact-match status. Logs:
 [`3B.log`](benchmark-results/kv-cache-strategy-2026-10-20/3B.log),
 [`7B.log`](benchmark-results/kv-cache-strategy-2026-10-20/7B.log), and
 [`14B.log`](benchmark-results/kv-cache-strategy-2026-10-20/14B.log).
+
+## FlashAttention: tiled online softmax (2026-10-21)
+
+Commit-level summary: replace the sequence-sized shared score buffers in
+prefill and decode with tiled online-softmax attention. The kernel keeps only a
+bounded score tile and the output accumulator in shared memory, streams K/V
+tiles from the cache, and rescales the running maximum, normalizer, and output
+for each tile. The old baseline decode and prefill kernels are removed; Flash
+is the only runtime attention path. This follows the tiled online-softmax
+formulation in the [FlashAttention paper](https://arxiv.org/abs/2205.14135).
+
+The full per-prompt comparison against the checked-in pre-Flash logs is in
+[`per_prompt_comparison.md`](benchmark-results/flash-attention-2026-10-21/per_prompt_comparison.md)
+and machine-readable form in
+[`per_prompt_comparison.csv`](benchmark-results/flash-attention-2026-10-21/per_prompt_comparison.csv).
+The comparison script is
+[`compare.py`](benchmark-results/flash-attention-2026-10-21/compare.py). It
+joins each prompt/backend result with its prior log and checks that input token
+counts match. The table contains all 9 prompts, both projection backends, and
+the four available checkpoints: Qwen2.5-1.5B, 3B, 7B, and 14B. The 0.5B fixture
+is not present locally.
+
+Environment and protocol: Tesla V100-SXM2-32GB; CUDA 12.4 and driver
+550.144.03; FP16 projection weights with FP32 activations/attention. The final
+full-suite runs used GPU 4 for all four checkpoints; earlier 1.5B, 3B, and 7B
+logs used GPU 1, and 14B used GPU 4. Each run used
+`--max-tokens 16 --linear both --weight-format fp16`, default GEMM prefill,
+and one timing pass per prompt, matching the previous logs in
+[`benchmark-results/kv-cache-facade-2026-10-20/`](benchmark-results/kv-cache-facade-2026-10-20/).
+This is a historical comparison across runs, not a simultaneous baseline
+execution. GPU load and clocks were not controlled, so small timing changes
+are within the limits of single-pass measurements.
+
+### Long-context prompt comparison
+
+Each cell gives previous attention → FlashAttention milliseconds and percent
+change for the 321-token long-context prompt. Negative change means lower time.
+
+| Model | Custom prefill | Custom decode | cuBLAS prefill | cuBLAS decode | Output text |
+|---|---:|---:|---:|---:|---|
+| 1.5B | 251.18 → 253.21 (+0.8%) | 281.84 → 283.05 (+0.4%) | 36.77 → 36.99 (+0.6%) | 153.98 → 152.10 (-1.2%) | Identical |
+| 3B | 488.56 → 488.70 (+0.0%) | 475.47 → 478.28 (+0.6%) | 61.00 → 60.30 (-1.1%) | 240.25 → 237.28 (-1.2%) | Identical |
+| 7B | 1110.00 → 1110.00 (+0.0%) | 863.52 → 854.93 (-1.0%) | 106.05 → 107.99 (+1.8%) | 401.47 → 398.96 (-0.6%) | Identical |
+| 14B | 2150.00 → 2150.00 (+0.0%) | 1720.00 → 1720.00 (+0.0%) | 224.88 → 231.10 (+2.8%) | 754.31 → 754.28 (-0.0%) | Identical |
+
+Per-prompt correctness: all 72 output-text comparisons (4 models × 9 prompts ×
+2 backends) matched the prior logs. In each current run, custom and cuBLAS
+generated the same tokens on all 9 prompts, and every prompt reported zero
+non-finite logits. Raw current outputs and timings are in
+[`benchmark-results/flash-attention-2026-10-21/`](benchmark-results/flash-attention-2026-10-21/).
+
+Tile-boundary case: the 1.5B FP16 cuBLAS run on GPU 4 used 237 repetitions of `test `,
+which tokenized to 257 prompt tokens. This crosses the selected 256-key tile
+boundary during prefill; the following decode query attended to 258 positions.
+It completed successfully: 257-token prefill 33.42 ms, two generated tokens,
+and 9.72 ms decode. The log is
+[`tile-boundary-257tokens.log`](benchmark-results/flash-attention-2026-10-21/tile-boundary-257tokens.log).
+
+Validation: `cargo test --all-targets` passed (2 library tests; binary and
+example targets passed with 0 tests). The full nine-prompt GPU suite passed on
+both custom and cuBLAS for all four available checkpoints.
 
 `cargo test --all-targets` passed (2 library unit tests; binary and example
 targets passed), and `cargo check` passed. GPU timings are single-pass

@@ -305,3 +305,55 @@ The full FP16 results for Qwen2.5-1.5B/3B/7B/14B, on both custom and cuBLAS,
 are in the [static batch section of HISTORY_BENCHMARK.md](HISTORY_BENCHMARK.md#static-independent-request-gpu-batches-2026-10-20).
 That section links 64 per-case group records, 256 per-request correctness and
 timing rows, 72 standalone prompt/backend rows, and four complete logs.
+
+## Tiled FlashAttention comparison (2026-10-21)
+
+The new attention path streams fixed-size K/V tiles and applies online softmax
+updates, avoiding the sequence-sized shared score buffer. FlashAttention is
+the only runtime attention implementation; the previous path is compared from
+its checked-in logs rather than retained as a selectable baseline.
+
+The full table compares previous → new per-prompt prefill and decode timings
+for both linear backends, across all 9 prompts and 4 available checkpoints:
+[`per_prompt_comparison.md`](benchmark-results/flash-attention-2026-10-21/per_prompt_comparison.md).
+The per-row CSV and the script that builds both reports are
+[`per_prompt_comparison.csv`](benchmark-results/flash-attention-2026-10-21/per_prompt_comparison.csv)
+and [`compare.py`](benchmark-results/flash-attention-2026-10-21/compare.py).
+Raw full-suite logs are in
+[`benchmark-results/flash-attention-2026-10-21/`](benchmark-results/flash-attention-2026-10-21/).
+
+The table below is the 321-token long-context case, not a suite average.
+Timings are milliseconds; negative deltas are faster than the previous log.
+
+| Model | Custom prefill | Custom decode | cuBLAS prefill | cuBLAS decode | Output text |
+|---|---:|---:|---:|---:|---|
+| 1.5B | 251.18 → 253.21 (+0.8%) | 281.84 → 283.05 (+0.4%) | 36.77 → 36.99 (+0.6%) | 153.98 → 152.10 (-1.2%) | Identical |
+| 3B | 488.56 → 488.70 (+0.0%) | 475.47 → 478.28 (+0.6%) | 61.00 → 60.30 (-1.1%) | 240.25 → 237.28 (-1.2%) | Identical |
+| 7B | 1110.00 → 1110.00 (+0.0%) | 863.52 → 854.93 (-1.0%) | 106.05 → 107.99 (+1.8%) | 401.47 → 398.96 (-0.6%) | Identical |
+| 14B | 2150.00 → 2150.00 (+0.0%) | 1720.00 → 1720.00 (+0.0%) | 224.88 → 231.10 (+2.8%) | 754.31 → 754.28 (-0.0%) | Identical |
+
+Environment: Tesla V100-SXM2-32GB, CUDA 12.4, driver 550.144.03, FP16
+projection weights and FP32 activations/attention. Final runs used GPU 4 for
+all four models. Earlier 1.5B/3B/7B logs used GPU 1, while 14B used GPU 4.
+Commands used the same flags as the previous per-prompt logs:
+
+```bash
+cargo run --release -- --gpu 4 --model-dir models/Qwen2.5-1.5B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+cargo run --release -- --gpu 4 --model-dir models/Qwen2.5-3B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+cargo run --release -- --gpu 4 --model-dir models/Qwen2.5-7B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+cargo run --release -- --gpu 4 --model-dir models/Qwen2.5-14B-Instruct \
+  --max-tokens 16 --linear both --weight-format fp16
+```
+
+The comparison uses one timing pass per prompt with default GEMM prefill, as in
+the historical files; it is not the median-of-three `--bench-prefill` test
+above. All 72 backend/prompt outputs matched the earlier log text. Current
+custom and cuBLAS token IDs matched for every prompt, with zero non-finite
+logits. GPU 1 was fully occupied by other users during the final rerun; GPU 4
+was initially idle, but the cluster is shared and single-pass measurements are
+subject to run-to-run noise. A 257-token targeted prompt crossed the 256-key tile boundary in
+prefill and continued at 258 positions in decode; it completed successfully
+([log](benchmark-results/flash-attention-2026-10-21/tile-boundary-257tokens.log)).

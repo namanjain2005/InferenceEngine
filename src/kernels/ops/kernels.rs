@@ -184,8 +184,20 @@ impl SwiGluKernel {
 
 pub struct AttentionKernel {
     _module: Arc<CudaModule>,
-    function: CudaFunction,
-    prefill_function: CudaFunction,
+    decode_flash_256: CudaFunction,
+    decode_flash_128: CudaFunction,
+    decode_flash_64: CudaFunction,
+    decode_flash_32: CudaFunction,
+    decode_flash_16: CudaFunction,
+    decode_flash_8: CudaFunction,
+    decode_flash_4: CudaFunction,
+    prefill_flash_256: CudaFunction,
+    prefill_flash_128: CudaFunction,
+    prefill_flash_64: CudaFunction,
+    prefill_flash_32: CudaFunction,
+    prefill_flash_16: CudaFunction,
+    prefill_flash_8: CudaFunction,
+    prefill_flash_4: CudaFunction,
 }
 
 pub struct ArgmaxKernel {
@@ -274,15 +286,95 @@ impl ArgmaxKernel {
 
 impl AttentionKernel {
     pub fn new(context: &Arc<CudaContext>) -> Result<Self, String> {
-        let (module, function) = load_kernel(context, ATTENTION_CUDA, "attention_decode")?;
-        let prefill_function = module
-            .load_function("attention_prefill")
-            .map_err(|e| format!("Loading attention_prefill failed: {e}"))?;
+        let (module, decode_flash_256) =
+            load_kernel(context, ATTENTION_CUDA, "attention_decode_flash_256")?;
+        let load = |name: &str| {
+            module
+                .load_function(name)
+                .map_err(|e| format!("Loading {name} failed: {e}"))
+        };
+        let decode_flash_128 = load("attention_decode_flash_128")?;
+        let decode_flash_64 = load("attention_decode_flash_64")?;
+        let decode_flash_32 = load("attention_decode_flash_32")?;
+        let decode_flash_16 = load("attention_decode_flash_16")?;
+        let decode_flash_8 = load("attention_decode_flash_8")?;
+        let decode_flash_4 = load("attention_decode_flash_4")?;
+        let prefill_flash_256 = load("attention_prefill_flash_256")?;
+        let prefill_flash_128 = load("attention_prefill_flash_128")?;
+        let prefill_flash_64 = load("attention_prefill_flash_64")?;
+        let prefill_flash_32 = load("attention_prefill_flash_32")?;
+        let prefill_flash_16 = load("attention_prefill_flash_16")?;
+        let prefill_flash_8 = load("attention_prefill_flash_8")?;
+        let prefill_flash_4 = load("attention_prefill_flash_4")?;
         Ok(Self {
             _module: module,
-            function,
-            prefill_function,
+            decode_flash_256,
+            decode_flash_128,
+            decode_flash_64,
+            decode_flash_32,
+            decode_flash_16,
+            decode_flash_8,
+            decode_flash_4,
+            prefill_flash_256,
+            prefill_flash_128,
+            prefill_flash_64,
+            prefill_flash_32,
+            prefill_flash_16,
+            prefill_flash_8,
+            prefill_flash_4,
         })
+    }
+
+    fn tile_size(head_dim: usize) -> Result<usize, String> {
+        match head_dim {
+            1..=128 => Ok(256),
+            129..=256 => Ok(128),
+            257..=512 => Ok(64),
+            513..=1024 => Ok(32),
+            1025..=2048 => Ok(16),
+            2049..=4096 => Ok(8),
+            4097..=12_283 => Ok(4),
+            _ => Err(format!(
+                "FlashAttention head dimension {head_dim} exceeds the shared-memory limit"
+            )),
+        }
+    }
+
+    fn shared_bytes(tile_size: usize, head_dim: usize) -> Result<u32, String> {
+        let floats = tile_size
+            .checked_add(1)
+            .and_then(|n| n.checked_add(head_dim))
+            .ok_or("FlashAttention shared memory size overflow")?;
+        let bytes = floats
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or("FlashAttention shared memory size overflow")?;
+        u32::try_from(bytes).map_err(|_| "FlashAttention shared memory exceeds CUDA range".into())
+    }
+
+    fn decode_function(&self, tile_size: usize) -> &CudaFunction {
+        match tile_size {
+            256 => &self.decode_flash_256,
+            128 => &self.decode_flash_128,
+            64 => &self.decode_flash_64,
+            32 => &self.decode_flash_32,
+            16 => &self.decode_flash_16,
+            8 => &self.decode_flash_8,
+            4 => &self.decode_flash_4,
+            _ => unreachable!("tile size selected by tile_size"),
+        }
+    }
+
+    fn prefill_function(&self, tile_size: usize) -> &CudaFunction {
+        match tile_size {
+            256 => &self.prefill_flash_256,
+            128 => &self.prefill_flash_128,
+            64 => &self.prefill_flash_64,
+            32 => &self.prefill_flash_32,
+            16 => &self.prefill_flash_16,
+            8 => &self.prefill_flash_8,
+            4 => &self.prefill_flash_4,
+            _ => unreachable!("tile size selected by tile_size"),
+        }
     }
 
     pub fn forward(
@@ -329,18 +421,14 @@ impl AttentionKernel {
         let head_i32 = checked_i32(head_dim, "Attention head dimension")?;
         let heads_per_kv = checked_i32(num_q_heads / num_kv_heads, "Attention heads per KV head")?;
         checked_i32(num_q_heads, "Attention query head count")?;
-        checked_i32(
-            seq_len
-                .checked_mul(4)
-                .ok_or("Attention shared memory size overflow")?,
-            "Attention shared memory size",
-        )?;
+        let tile_size = Self::tile_size(head_dim)?;
+        let shared_mem_bytes = Self::shared_bytes(tile_size, head_dim)?;
 
         let mut output_dev = stream
             .alloc_zeros::<f32>(q_len)
             .map_err(|e| format!("Allocating attention output failed: {e}"))?;
         let scale = 1.0f32 / (head_dim as f32).sqrt();
-        let mut launch = stream.launch_builder(&self.function);
+        let mut launch = stream.launch_builder(self.decode_function(tile_size));
         launch.arg(q);
         launch.arg(k_cache);
         launch.arg(v_cache);
@@ -350,21 +438,17 @@ impl AttentionKernel {
         launch.arg(&head_i32);
         launch.arg(&heads_per_kv);
         launch.arg(&scale);
-        // Pad the dynamic score buffer: nvcc may emit a wider/vectorised tail
-        // load for the `scores[t]` scans, which otherwise runs a few elements
-        // past the logical end of the buffer (compute-sanitizer: invalid shared
-        // read just past `reduction`). The extra slots keep those loads in range.
         let cfg = LaunchConfig {
             grid_dim: (num_q_heads as u32, 1, 1),
             block_dim: (THREADS, 1, 1),
-            shared_mem_bytes: ((seq_len + 8) * 4) as u32,
+            shared_mem_bytes,
         };
         unsafe { launch.launch(cfg) }
             .map_err(|e| format!("Launching attention CUDA kernel failed: {e}"))?;
         Ok(output_dev)
     }
 
-    /// Batched causal prefill attention. `q` is `[batch, q_heads*head_dim]`
+    /// Tiled causal prefill attention. `q` is `[batch, q_heads*head_dim]`
     /// (already RoPE'd); caches already contain the prompt rows at
     /// `[start_pos, start_pos+batch)`. Returns `[batch, q_heads*head_dim]`.
     #[allow(clippy::too_many_arguments)]
@@ -407,13 +491,6 @@ impl AttentionKernel {
                 v_cache.len()
             ));
         }
-        let full_seq = start_pos + batch;
-        checked_i32(
-            full_seq
-                .checked_mul(4)
-                .ok_or("Prefill attention shared memory size overflow")?,
-            "Prefill attention shared memory size",
-        )?;
         let (sp, b) = (
             checked_i32(start_pos, "Prefill start")?,
             checked_i32(batch, "Prefill batch")?,
@@ -422,12 +499,14 @@ impl AttentionKernel {
         let kv_i32 = checked_i32(kv_dim, "Attention KV dimension")?;
         let head_i32 = checked_i32(head_dim, "Attention head dimension")?;
         let heads_per_kv = checked_i32(num_q_heads / num_kv_heads, "Attention heads per KV head")?;
+        let tile_size = Self::tile_size(head_dim)?;
+        let shared_mem_bytes = Self::shared_bytes(tile_size, head_dim)?;
 
         let mut output_dev = stream
             .alloc_zeros::<f32>(q_len)
             .map_err(|e| format!("Allocating prefill attention output failed: {e}"))?;
         let scale = 1.0f32 / (head_dim as f32).sqrt();
-        let mut launch = stream.launch_builder(&self.prefill_function);
+        let mut launch = stream.launch_builder(self.prefill_function(tile_size));
         launch.arg(q);
         launch.arg(k_cache);
         launch.arg(v_cache);
@@ -439,11 +518,10 @@ impl AttentionKernel {
         launch.arg(&head_i32);
         launch.arg(&heads_per_kv);
         launch.arg(&scale);
-        // Padded like `forward` above so vectorised tail loads stay in range.
         let cfg = LaunchConfig {
             grid_dim: (batch as u32, num_q_heads as u32, 1),
             block_dim: (THREADS, 1, 1),
-            shared_mem_bytes: ((full_seq + 8) * 4) as u32,
+            shared_mem_bytes,
         };
         unsafe { launch.launch(cfg) }
             .map_err(|e| format!("Launching prefill attention kernel failed: {e}"))?;
