@@ -662,3 +662,20 @@ kernels ([log](benchmark-results/cutlass-prefill-2026-10-21/ncu-flash-1k.log)).
 See
 [`BENCHMARK.md`](BENCHMARK.md) for the exact per-case values, commands, and
 limitations.
+
+## CUTLASS submodule cleanup (2026-10-21)
+
+Replace the 871-file, 25.5 MiB copied CUTLASS subset with a submodule pinned to
+the same upstream v3.9.2 commit. The repository now tracks only the submodule
+pointer; `CUTLASS.md` documents recursive cloning, pulling the pinned pointer,
+and intentionally upgrading the dependency. NVCC's dependency scan for this
+wrapper uses 257 CUTLASS headers (about 5 MiB) from the core include tree and
+the fused-attention example. A build-time overlay applies the local GQA guard
+to a generated copy of `kernel_forward.h`, leaving the upstream checkout clean.
+
+Validation after the switch: `cargo build --release` and
+`cargo test --all-targets` passed. A 1.5B FP16 one-prompt A/B smoke run passed
+on the V100 with identical generated token IDs (FlashAttention 12.43 ms,
+CUTLASS 11.84 ms prefill). The parent repository no longer stores the copied
+CUTLASS files; a fresh checkout must initialize the submodule as documented in
+[`CUTLASS.md`](CUTLASS.md).
