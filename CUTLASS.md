@@ -1,7 +1,10 @@
 # CUTLASS dependency
 
-The prefill attention kernel uses the fused multi-head attention example from
-NVIDIA CUTLASS. CUTLASS is a Git submodule pinned by this repository to
+The `cutlass-fmha` prefill backend uses the fused multi-head attention example
+from NVIDIA CUTLASS. It is not the in-repo FlashAttention kernel. The separate
+`flash` backend uses the V100 WMMA FlashAttention implementation with FP16
+Q/K/V and cache; `flash-legacy` selects the previous one-query online-softmax
+path for ablation. CUTLASS is a Git submodule pinned by this repository to
 v3.9.2 (`ad7b2f5e84fcfa124cb02b91d5bd26d238c0459e`). The build compiles the
 kernel to SM70 PTX with NVCC. A small build-time overlay preserves the GQA
 behavior needed by this wrapper without modifying the upstream submodule.
@@ -79,6 +82,9 @@ cargo test --all-targets
 The default prompt source is `BASE_PROMPTS.txt`. Each command below runs all
 12 prompts with 16 generated tokens, FP16 projection weights, FP16 attention
 and KV cache, and the same prompt input for each selected implementation.
+Use `--prefill-attention all` to compare the fused GQA FlashAttention path, the
+one-query ablation, and CUTLASS FMHA in one run; `both` compares only the two
+current attention implementations.
 
 Run the 1.5B and 3B cases with both linear backends and both attention paths:
 
@@ -86,12 +92,12 @@ Run the 1.5B and 3B cases with both linear backends and both attention paths:
 cargo run --release -- --gpu 0 \
   --model-dir models/Qwen2.5-1.5B-Instruct \
   --weight-format fp16 --attention-format fp16 \
-  --prefill-attention both --max-tokens 16 --linear both
+  --prefill-attention all --max-tokens 16 --linear both
 
 cargo run --release -- --gpu 0 \
   --model-dir models/Qwen2.5-3B-Instruct \
   --weight-format fp16 --attention-format fp16 \
-  --prefill-attention both --max-tokens 16 --linear both
+  --prefill-attention all --max-tokens 16 --linear both
 ```
 
 For 7B, run each attention path separately with the custom linear backend to
@@ -106,7 +112,7 @@ cargo run --release -- --gpu 0 \
 cargo run --release -- --gpu 0 \
   --model-dir models/Qwen2.5-7B-Instruct \
   --weight-format fp16 --attention-format fp16 \
-  --prefill-attention cutlass --max-tokens 16 --linear custom
+  --prefill-attention cutlass-fmha --max-tokens 16 --linear custom
 ```
 
 For exact 1,024 / 4,096 / 8,192-token contexts, run one untimed warmup and
@@ -117,7 +123,7 @@ and compares final logits/token IDs. The 1.5B command is:
 cargo run --release -- --gpu 0 \
   --model-dir models/Qwen2.5-1.5B-Instruct \
   --weight-format fp16 --attention-format fp16 \
-  --prefill-attention both --bench-prefill --bench-repeat 3 \
+  --prefill-attention all --bench-prefill --bench-repeat 3 \
   --prefill gemm --max-tokens 1 --linear cublas \
   --benchmark-contexts 1024,4096,8192
 ```

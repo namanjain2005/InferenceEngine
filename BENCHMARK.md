@@ -308,10 +308,10 @@ timing rows, 72 standalone prompt/backend rows, and four complete logs.
 
 ## Tiled FlashAttention comparison (2026-10-21)
 
-The new attention path streams fixed-size K/V tiles and applies online softmax
-updates, avoiding the sequence-sized shared score buffer. FlashAttention is
-the only runtime attention implementation; the previous path is compared from
-its checked-in logs rather than retained as a selectable baseline.
+At that revision, the new attention path streamed fixed-size K/V tiles and
+applied online softmax updates, avoiding the sequence-sized shared score
+buffer. The one-query implementation was not selectable then; the later V100
+GQA implementation adds it back as the `flash-legacy` ablation.
 
 The full table compares previous → new per-prompt prefill and decode timings
 for both linear backends, across all 9 prompts and 4 available checkpoints:
@@ -379,9 +379,10 @@ marked as not reached.
 
 ## CUTLASS FP16 causal prefill A/B (2026-10-21)
 
-The CUTLASS path uses NVIDIA CUTLASS v3.9.2's fused online-softmax attention
-kernel with an SM70 configuration for V100. FlashAttention remains selectable
-as the A/B path. Both paths receive identical FP16 Q/K/V and an FP16 KV cache;
+The CUTLASS FMHA path uses NVIDIA CUTLASS v3.9.2's fused multi-head-attention
+example with online softmax and an SM70 configuration for V100. It is not the
+FlashAttention kernel. The CUDA FlashAttention path remains selectable for A/B.
+Both paths receive identical FP16 Q/K/V and an FP16 KV cache;
 softmax/output accumulation is FP32. Model projections and residual-stream
 activations remain unchanged. QKV projections are not fused. Decode continues
 to use FlashAttention, reading the same FP16 cache in the FP16 attention mode.
@@ -407,7 +408,7 @@ memory. The comparison within each row keeps that linear backend fixed. The
 previous revision's FP32 FlashAttention/cache measurements are not a fair
 baseline for this FP16 experiment, so no cross-revision speedup is inferred.
 
-| Model | Tokens | Linear backend | FlashAttention prefill | CUTLASS prefill | Speedup | Max logit diff | Output check |
+| Model | Tokens | Linear backend | CUDA FlashAttention prefill | CUTLASS FMHA prefill | FMHA speedup | Max logit diff | Output check |
 |---|---:|---|---:|---:|---:|---:|---|
 | Qwen2.5-1.5B | 1,024 | cuBLAS | 154.22 ms | 72.22 ms | 2.14x | 2.159e-2 | IDs identical (1/1) |
 | Qwen2.5-1.5B | 4,096 | cuBLAS | 1,460 ms | 319.83 ms | 4.57x | 1.266e-2 | IDs identical (1/1) |
@@ -454,3 +455,118 @@ The 1.5B, 3B, and 7B exact-context logs are
 [7B custom](benchmark-results/cutlass-prefill-2026-10-21/long-context-7B-custom.log).
 The 14B capacity attempt is captured
 [here](benchmark-results/cutlass-prefill-2026-10-21/oom-14B.log).
+
+## V100 fused GQA FlashAttention and CUTLASS FMHA naming (2026-10-24)
+
+`--prefill-attention flash --attention-format f16` now selects an in-repo
+V100-compatible FlashAttention kernel. Each CTA tiles four query-token
+positions and every query head sharing one KV head, then streams 32-key K/V
+tiles. It stages K for the QK matrix product, reuses that shared-memory buffer
+for transposed V in the PV product, and maintains the FP32 online-softmax
+statistics and output accumulator on chip. Volta WMMA performs QK and PV with
+FP16 inputs and FP32 accumulation. Causal tiles beyond a CTA's last query are
+skipped. The sequence-sized attention matrix is never materialized.
+
+This is an in-repository implementation of the FlashAttention algorithm, not
+Dao-AILab's official kernel. `--prefill-attention flash-legacy` exposes the
+previous one-query online-softmax kernel for ablation. `cutlass-fmha` names the
+CUTLASS v3.9.2 fused multi-head-attention example accurately; that path also
+uses online softmax, but it is not this FlashAttention kernel. The new WMMA
+FlashAttention path requires `--attention-format f16`; the existing default
+FP32 mode is preserved and uses the one-query implementation.
+
+### Exact-context A/B: Qwen2.5-1.5B
+
+The table reports full-model GEMM-plus-attention prefill, with one warmup and
+three synchronized timed runs per path; each cell is the median. Model weights,
+Q/K/V, and KV cache were FP16, and cuBLAS was held fixed. These are not isolated
+attention-kernel timings. All three paths generated the same token at each
+context. The log includes the per-case max-logit differences against the new
+FlashAttention path.
+
+| Input tokens | Fused GQA FlashAttention | Legacy one-query | CUTLASS FMHA | Generated token IDs |
+|---:|---:|---:|---:|---|
+| 1,024 | 197.58 ms | 303.31 ms | 146.45 ms | Identical across all three |
+| 4,096 | 1.27 s | 3.12 s | 644.60 ms | Identical across all three |
+| 8,192 | 4.10 s | 11.58 s | 1.79 s | Identical across all three |
+
+The fused GQA kernel is faster than the old one-query kernel in these long
+contexts, while CUTLASS FMHA remains faster in this full-model comparison.
+GPU 3 was shared during the run (utilization varied); these results are
+directional and do not establish an isolated kernel speedup. The
+[exact-context log](benchmark-results/flashattention-gqa-2026-10-24/contexts-1k-4k-8k-1.5B-q4-final-gpu3.log)
+records model, flags, each result, logits, and token agreement.
+
+### Full `BASE_PROMPTS.txt` suites
+
+The runs below used the same FP16 attention/cache across `flash`,
+`flash-legacy`, and `cutlass-fmha`; each log contains all 12 prompt timings and
+per-prompt output comparisons. All paths generated identical token IDs for
+every prompt.
+
+| Model | Projection weights / linear | GQA heads per KV head | Hardware | Result |
+|---|---|---:|---|---|
+| Qwen2.5-1.5B | FP16 / custom + cuBLAS | 6 | V100 GPU 3 | 12/12 prompts completed on both linear paths; all IDs identical |
+| Qwen2.5-3B | FP16 / custom + cuBLAS | 8 | V100 GPU 7 | 12/12 prompts completed on both linear paths; all IDs identical |
+| Qwen2.5-7B | INT8 / custom | 7 | V100 GPU 4 | 12/12 prompts completed; all IDs identical |
+
+The 7B run used INT8 projection weights because shared GPU memory was
+insufficient for its FP16 resident weights; attention inputs and cache remained
+FP16. `--linear both` attempts for 3B on GPU 3 and 7B on GPUs 7 and 3 hit OOM;
+the 3B run was repeated successfully on GPU 7, while 7B completed with custom
+linear only. These OOM attempts are preserved in the logs. The local 14B model
+symlink points to a missing directory, so it was not available for this
+revision. Raw logs:
+[1.5B both linear](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-1.5B-both-linear-gpu3.log),
+[3B both linear](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-3B-both-linear-gpu7.log),
+[3B GPU 3 OOM attempt](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-3B-both-linear-gpu3.log),
+[7B custom linear](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-7B-int8-gpu4.log),
+[7B GPU 7 OOM attempt](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-7B-both-linear-int8-gpu7.log), and
+[7B GPU 3 OOM attempt](benchmark-results/flashattention-gqa-2026-10-24/prompt-suite-7B-both-linear-int8-gpu3.log).
+
+### Reproduce
+
+Build and run the complete Cargo target set:
+
+```bash
+cargo build --release
+cargo test --all-targets
+```
+
+Run all three attention paths on the 1.5B prompt suite:
+
+```bash
+cargo run --release -- --gpu 3 \
+  --model-dir models/Qwen2.5-1.5B-Instruct \
+  --weight-format fp16 --attention-format fp16 \
+  --prefill-attention all --max-tokens 16 --linear both
+```
+
+The 3B suite uses the same flags with `--gpu 7` and
+`models/Qwen2.5-3B-Instruct`. For the 7B suite in the recorded shared-memory
+environment:
+
+```bash
+cargo run --release -- --gpu 4 \
+  --model-dir models/Qwen2.5-7B-Instruct \
+  --weight-format int8 --attention-format fp16 \
+  --prefill-attention all --max-tokens 16 --linear custom
+```
+
+Reproduce the exact 1K/4K/8K median comparison:
+
+```bash
+cargo run --release -- --gpu 3 \
+  --model-dir models/Qwen2.5-1.5B-Instruct \
+  --weight-format fp16 --attention-format fp16 \
+  --prefill-attention all --bench-prefill --bench-repeat 3 \
+  --prefill gemm --max-tokens 1 --linear cublas \
+  --benchmark-contexts 1024,4096,8192
+```
+
+The targeted 33-token run crosses the 32-key tile boundary and exercises a
+partial four-query tile; its log is
+[here](benchmark-results/flashattention-gqa-2026-10-24/smoke-33tokens-q4-gpu3.log).
+All runs used a shared Tesla V100-SXM2-32GB with CUDA 12.4 and driver
+550.144.03; see the linked logs for each prompt's timing and any system load
+visible during execution.

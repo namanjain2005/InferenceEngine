@@ -1,0 +1,1233 @@
+   Compiling Engine v0.1.0 (/home/23uec572/Naman_jain/InferenceEngine/tes/InferenceEngine)
+    Finished `release` profile [optimized] target(s) in 6.63s
+     Running `target/release/Engine --gpu 3 --model-dir models/Qwen2.5-1.5B-Instruct --weight-format fp16 --attention-format fp16 --prefill-attention all --max-tokens 16 --linear both`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 3.
+[2/5] Initializing CUDA Context on GPU 3...
+Initializing CUDA Context on GPU 3...
+CUDA Context and default stream ready on GPU 3.
+   -> Linear backend(s): custom, cublas
+   -> Projection weight format: F16 (FP32 activations and accumulation)
+   -> Prefill attention path(s): FlashAttention WMMA FP16, Legacy one-query attention, CUTLASS FMHA
+   -> Attention Q/K/V and KV cache format: FP16
+   -> GPU 3 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-1.5B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 28 layers, hidden=1536, intermediate=8960, 12 q_heads, 2 kv_heads (GQA)
+   -> Safetensors opened: 338 tensors in header.
+   -> Validated 1543714304 parameters (2.88 GiB source weights; 3.31 GiB estimated resident weights as F16).
+   Uploading embedding and final norm weights to GPU...
+   Loading and uploading layer weights: 1/28   Loading and uploading layer weights: 2/28   Loading and uploading layer weights: 3/28   Loading and uploading layer weights: 4/28   Loading and uploading layer weights: 5/28   Loading and uploading layer weights: 6/28   Loading and uploading layer weights: 7/28   Loading and uploading layer weights: 8/28   Loading and uploading layer weights: 9/28   Loading and uploading layer weights: 10/28   Loading and uploading layer weights: 11/28   Loading and uploading layer weights: 12/28   Loading and uploading layer weights: 13/28   Loading and uploading layer weights: 14/28   Loading and uploading layer weights: 15/28   Loading and uploading layer weights: 16/28   Loading and uploading layer weights: 17/28   Loading and uploading layer weights: 18/28   Loading and uploading layer weights: 19/28   Loading and uploading layer weights: 20/28   Loading and uploading layer weights: 21/28   Loading and uploading layer weights: 22/28   Loading and uploading layer weights: 23/28   Loading and uploading layer weights: 24/28   Loading and uploading layer weights: 25/28   Loading and uploading layer weights: 26/28   Loading and uploading layer weights: 27/28   Loading and uploading layer weights: 28/28
+   All model weights are resident on the GPU.
+   -> Model loaded in 13.53s
+   -> Warmup done for backend custom.
+   -> Warmup done for backend cublas.
+
+[5/5] Running 12 prompt(s)...
+
+--- Prompt 1/12: 1 - Tiny context ---
+Input prompt:
+What is 7 + 5? Answer in one complete sentence.
+Input tokens: 33 (identical input fed to every backend)
+
+[custom] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 189.95ms; generated 13 tokens with 13 decode steps in 412.42ms (31.52 decode tok/s)
+
+[cublas] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 15.76ms; generated 13 tokens with 13 decode steps in 138.81ms (93.65 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       189.95ms     412.42ms          31.52        13
+cublas        15.76ms     138.81ms          93.65        13
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (13/13)
+  prefill last-token logits: max abs diff (finite) 1.583e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 189.95ms | cublas 15.76ms  ->  cublas 12.05x faster
+  decode:  custom 412.42ms | cublas 138.81ms  ->  cublas 2.97x faster
+  end-to-end: custom 602.37ms | cublas 154.57ms  ->  cublas 3.90x faster
+
+[custom] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 120.51ms; generated 13 tokens with 13 decode steps in 277.20ms (46.90 decode tok/s)
+
+[cublas] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 14.97ms; generated 13 tokens with 13 decode steps in 141.18ms (92.08 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       120.51ms     277.20ms          46.90        13
+cublas        14.97ms     141.18ms          92.08        13
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (13/13)
+  prefill last-token logits: max abs diff (finite) 1.586e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 120.51ms | cublas 14.97ms  ->  cublas 8.05x faster
+  decode:  custom 277.20ms | cublas 141.18ms  ->  cublas 1.96x faster
+  end-to-end: custom 397.71ms | cublas 156.15ms  ->  cublas 2.55x faster
+
+[custom] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[custom] --- End generated output ---
+[custom] Timing: prefill 33 tokens in 120.88ms; generated 13 tokens with 13 decode steps in 276.00ms (47.10 decode tok/s)
+
+[cublas] 1 - Tiny context -> generated output:
+The sum of 7 and 5 is 12.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 15.10ms; generated 13 tokens with 13 decode steps in 141.33ms (91.99 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       120.88ms     276.00ms          47.10        13
+cublas        15.10ms     141.33ms          91.99        13
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (13/13)
+  prefill last-token logits: max abs diff (finite) 2.102e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 120.88ms | cublas 15.10ms  ->  cublas 8.01x faster
+  decode:  custom 276.00ms | cublas 141.33ms  ->  cublas 1.95x faster
+  end-to-end: custom 396.88ms | cublas 156.42ms  ->  cublas 2.54x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 189.95ms | 120.51ms | 1.58x | 1.058e-2 | identical (13/13) |
+| cublas | Legacy one-query | 15.76ms | 14.97ms | 1.05x | 1.641e-2 | identical (13/13) |
+| custom | CUTLASS FMHA | 189.95ms | 120.88ms | 1.57x | 1.331e-2 | identical (13/13) |
+| cublas | CUTLASS FMHA | 15.76ms | 15.10ms | 1.04x | 2.267e-2 | identical (13/13) |
+
+--- Prompt 2/12: 2 - Short context ---
+Input prompt:
+Changing one kernel detail at a time can make a performance experiment easier to
+understand. Why? Answer in one complete sentence.
+Input tokens: 45 (identical input fed to every backend)
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 123.20ms; generated 16 tokens with 15 decode steps in 317.84ms (47.19 decode tok/s)
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 16.11ms; generated 16 tokens with 15 decode steps in 159.41ms (94.10 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       123.20ms     317.84ms          47.19        16
+cublas        16.11ms     159.41ms          94.10        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.640e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 123.20ms | cublas 16.11ms  ->  cublas 7.65x faster
+  decode:  custom 317.84ms | cublas 159.41ms  ->  cublas 1.99x faster
+  end-to-end: custom 441.04ms | cublas 175.52ms  ->  cublas 2.51x faster
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 123.93ms; generated 16 tokens with 15 decode steps in 316.56ms (47.39 decode tok/s)
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 15.41ms; generated 16 tokens with 15 decode steps in 164.28ms (91.31 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       123.93ms     316.56ms          47.39        16
+cublas        15.41ms     164.28ms          91.31        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.736e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 123.93ms | cublas 15.41ms  ->  cublas 8.04x faster
+  decode:  custom 316.56ms | cublas 164.28ms  ->  cublas 1.93x faster
+  end-to-end: custom 440.49ms | cublas 179.69ms  ->  cublas 2.45x faster
+
+[custom] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[custom] --- End generated output ---
+[custom] Timing: prefill 45 tokens in 124.00ms; generated 16 tokens with 15 decode steps in 316.50ms (47.39 decode tok/s)
+
+[cublas] 2 - Short context -> generated output:
+Changing one kernel detail at a time simplifies the experiment by isolating the effect
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 45 tokens in 15.41ms; generated 16 tokens with 15 decode steps in 162.79ms (92.14 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       124.00ms     316.50ms          47.39        16
+cublas        15.41ms     162.79ms          92.14        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.838e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 124.00ms | cublas 15.41ms  ->  cublas 8.05x faster
+  decode:  custom 316.50ms | cublas 162.79ms  ->  cublas 1.94x faster
+  end-to-end: custom 440.49ms | cublas 178.20ms  ->  cublas 2.47x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 123.20ms | 123.93ms | 0.99x | 1.151e-2 | identical (16/16) |
+| cublas | Legacy one-query | 16.11ms | 15.41ms | 1.05x | 1.299e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 123.20ms | 124.00ms | 0.99x | 1.734e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 16.11ms | 15.41ms | 1.05x | 1.839e-2 | identical (16/16) |
+
+--- Prompt 3/12: 3 - Medium context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+Reliable software is built by checking each layer of a system independently.
+Input data is validated before it reaches a computation. The computation should
+preserve its mathematical meaning while making good use of the hardware. Results
+are then checked against a simple reference. Performance measurements should
+record the input size, output size, device, and settings so that later runs can
+be compared fairly. A useful experiment changes one implementation detail at a
+time and keeps the workload fixed. This makes it easier to identify which change
+caused an improvement or regression.
+
+Summarize the main idea of the passage in two short sentences.
+Input tokens: 154 (identical input fed to every backend)
+
+[custom] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 180.92ms; generated 16 tokens with 15 decode steps in 333.26ms (45.01 decode tok/s)
+
+[cublas] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 28.69ms; generated 16 tokens with 15 decode steps in 163.45ms (91.77 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       180.92ms     333.26ms          45.01        16
+cublas        28.69ms     163.45ms          91.77        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.815e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 180.92ms | cublas 28.69ms  ->  cublas 6.31x faster
+  decode:  custom 333.26ms | cublas 163.45ms  ->  cublas 2.04x faster
+  end-to-end: custom 514.18ms | cublas 192.14ms  ->  cublas 2.68x faster
+
+[custom] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 181.49ms; generated 16 tokens with 15 decode steps in 332.44ms (45.12 decode tok/s)
+
+[cublas] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 28.40ms; generated 16 tokens with 15 decode steps in 163.51ms (91.74 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       181.49ms     332.44ms          45.12        16
+cublas        28.40ms     163.51ms          91.74        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.136e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 181.49ms | cublas 28.40ms  ->  cublas 6.39x faster
+  decode:  custom 332.44ms | cublas 163.51ms  ->  cublas 2.03x faster
+  end-to-end: custom 513.93ms | cublas 191.91ms  ->  cublas 2.68x faster
+
+[custom] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[custom] --- End generated output ---
+[custom] Timing: prefill 154 tokens in 180.23ms; generated 16 tokens with 15 decode steps in 328.71ms (45.63 decode tok/s)
+
+[cublas] 3 - Medium context -> generated output:
+The passage emphasizes the importance of validating input data, preserving mathematical meaning during computation,
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 154 tokens in 27.45ms; generated 16 tokens with 15 decode steps in 163.23ms (91.90 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       180.23ms     328.71ms          45.63        16
+cublas        27.45ms     163.23ms          91.90        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.297e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 180.23ms | cublas 27.45ms  ->  cublas 6.57x faster
+  decode:  custom 328.71ms | cublas 163.23ms  ->  cublas 2.01x faster
+  end-to-end: custom 508.94ms | cublas 190.68ms  ->  cublas 2.67x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 180.92ms | 181.49ms | 1.00x | 1.098e-2 | identical (16/16) |
+| cublas | Legacy one-query | 28.69ms | 28.40ms | 1.01x | 1.744e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 180.92ms | 180.23ms | 1.00x | 1.053e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 28.69ms | 27.45ms | 1.05x | 1.574e-2 | identical (16/16) |
+
+--- Prompt 4/12: 4 - Long context ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+A small inference engine moves data through several stages. It begins by
+converting text into token identifiers. The model maps those identifiers into
+vectors, applies normalization, and computes query, key, and value projections.
+Rotary position information is added to the query and key vectors. Keys and
+values from earlier positions are kept in a cache so that each generated token
+can attend to the existing context without recomputing every projection.
+
+For one query head, attention compares the query with the keys at every cached
+position. Each score is scaled, normalized with softmax, and used to form a
+weighted sum of the values. In multi-head attention, each query head has its own
+key and value head. In grouped-query attention, several query heads share a key
+and value head. The same computation can handle either arrangement when the
+query-head and KV-head counts are provided correctly.
+
+GPU performance depends on how threads access memory as well as how many
+operations they perform. Neighboring lanes are most effective when they read
+neighboring values. A warp can cooperate on a dot product by loading adjacent
+head dimensions and reducing the partial sums. Softmax also needs reductions to
+find the maximum score and the sum of exponentials. Measuring one optimization
+at a time helps show whether coalesced reads or parallel reductions improve the
+actual workload.
+
+Based on the passage, explain grouped-query attention in two short sentences.
+Input tokens: 321 (identical input fed to every backend)
+
+[custom] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 297.68ms; generated 16 tokens with 15 decode steps in 342.08ms (43.85 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 41.48ms; generated 16 tokens with 15 decode steps in 173.91ms (86.25 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       297.68ms     342.08ms          43.85        16
+cublas        41.48ms     173.91ms          86.25        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.535e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 297.68ms | cublas 41.48ms  ->  cublas 7.18x faster
+  decode:  custom 342.08ms | cublas 173.91ms  ->  cublas 1.97x faster
+  end-to-end: custom 639.76ms | cublas 215.39ms  ->  cublas 2.97x faster
+
+[custom] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 303.06ms; generated 16 tokens with 15 decode steps in 340.15ms (44.10 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 44.80ms; generated 16 tokens with 15 decode steps in 172.71ms (86.85 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       303.06ms     340.15ms          44.10        16
+cublas        44.80ms     172.71ms          86.85        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.428e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 303.06ms | cublas 44.80ms  ->  cublas 6.76x faster
+  decode:  custom 340.15ms | cublas 172.71ms  ->  cublas 1.97x faster
+  end-to-end: custom 643.21ms | cublas 217.51ms  ->  cublas 2.96x faster
+
+[custom] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[custom] --- End generated output ---
+[custom] Timing: prefill 321 tokens in 296.02ms; generated 16 tokens with 15 decode steps in 343.59ms (43.66 decode tok/s)
+
+[cublas] 4 - Long context -> generated output:
+In grouped-query attention, several query heads share a key and value head, allowing
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 321 tokens in 35.28ms; generated 16 tokens with 15 decode steps in 173.29ms (86.56 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       296.02ms     343.59ms          43.66        16
+cublas        35.28ms     173.29ms          86.56        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 2.097e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 296.02ms | cublas 35.28ms  ->  cublas 8.39x faster
+  decode:  custom 343.59ms | cublas 173.29ms  ->  cublas 1.98x faster
+  end-to-end: custom 639.61ms | cublas 208.56ms  ->  cublas 3.07x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 297.68ms | 303.06ms | 0.98x | 1.519e-2 | identical (16/16) |
+| cublas | Legacy one-query | 41.48ms | 44.80ms | 0.93x | 1.344e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 297.68ms | 296.02ms | 1.01x | 1.329e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 41.48ms | 35.28ms | 1.18x | 1.480e-2 | identical (16/16) |
+
+--- Prompt 5/12: 5 - Long context with repeated structure ---
+Input prompt:
+Read the passage, then follow the instruction at the end.
+
+The first record has a name, a category, and a numeric value. The second record
+has a name, a category, and a numeric value. The third record has a name, a
+category, and a numeric value. The fourth record has a name, a category, and a
+numeric value. The fifth record has a name, a category, and a numeric value.
+The sixth record has a name, a category, and a numeric value. The seventh record
+has a name, a category, and a numeric value. The eighth record has a name, a
+category, and a numeric value. The ninth record has a name, a category, and a
+numeric value. The tenth record has a name, a category, and a numeric value.
+
+When processing a long sequence, the key and value cache grows with the number
+of positions. Every new query must compare against the cached keys and combine
+the cached values. Changing the thread layout can improve memory transactions,
+but the result should still match the same attention calculation. Context size
+is therefore an important workload dimension when comparing kernel versions.
+
+According to the passage, what does the key-value cache save the model from
+recomputing? Answer in one complete sentence.
+Input tokens: 282 (identical input fed to every backend)
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 271.67ms; generated 16 tokens with 15 decode steps in 335.07ms (44.77 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 37.10ms; generated 16 tokens with 15 decode steps in 171.06ms (87.69 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       271.67ms     335.07ms          44.77        16
+cublas        37.10ms     171.06ms          87.69        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.953e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 271.67ms | cublas 37.10ms  ->  cublas 7.32x faster
+  decode:  custom 335.07ms | cublas 171.06ms  ->  cublas 1.96x faster
+  end-to-end: custom 606.74ms | cublas 208.16ms  ->  cublas 2.91x faster
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 229.05ms; generated 16 tokens with 15 decode steps in 297.83ms (50.36 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 35.04ms; generated 16 tokens with 15 decode steps in 152.17ms (98.57 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       229.05ms     297.83ms          50.36        16
+cublas        35.04ms     152.17ms          98.57        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.288e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 229.05ms | cublas 35.04ms  ->  cublas 6.54x faster
+  decode:  custom 297.83ms | cublas 152.17ms  ->  cublas 1.96x faster
+  end-to-end: custom 526.88ms | cublas 187.21ms  ->  cublas 2.81x faster
+
+[custom] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[custom] --- End generated output ---
+[custom] Timing: prefill 282 tokens in 222.94ms; generated 16 tokens with 15 decode steps in 286.33ms (52.39 decode tok/s)
+
+[cublas] 5 - Long context with repeated structure -> generated output:
+The key-value cache saves the model from recomputing the values of the numeric
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 282 tokens in 29.40ms; generated 16 tokens with 15 decode steps in 152.53ms (98.34 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       222.94ms     286.33ms          52.39        16
+cublas        29.40ms     152.53ms          98.34        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.562e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 222.94ms | cublas 29.40ms  ->  cublas 7.58x faster
+  decode:  custom 286.33ms | cublas 152.53ms  ->  cublas 1.88x faster
+  end-to-end: custom 509.27ms | cublas 181.93ms  ->  cublas 2.80x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 271.67ms | 229.05ms | 1.19x | 9.771e-3 | identical (16/16) |
+| cublas | Legacy one-query | 37.10ms | 35.04ms | 1.06x | 2.447e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 271.67ms | 222.94ms | 1.22x | 1.038e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 37.10ms | 29.40ms | 1.26x | 2.563e-2 | identical (16/16) |
+
+--- Prompt 6/12: 6 - Multi-step arithmetic ---
+Input prompt:
+A library has 6 shelves with 14 books on each shelf. It lends 19 books. Show
+one calculation and state how many books remain in one complete sentence.
+Input tokens: 56 (identical input fed to every backend)
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 109.58ms; generated 16 tokens with 15 decode steps in 275.23ms (54.50 decode tok/s)
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 15.21ms; generated 16 tokens with 15 decode steps in 143.25ms (104.71 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       109.58ms     275.23ms          54.50        16
+cublas        15.21ms     143.25ms         104.71        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.073e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 109.58ms | cublas 15.21ms  ->  cublas 7.21x faster
+  decode:  custom 275.23ms | cublas 143.25ms  ->  cublas 1.92x faster
+  end-to-end: custom 384.81ms | cublas 158.46ms  ->  cublas 2.43x faster
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 109.06ms; generated 16 tokens with 15 decode steps in 274.57ms (54.63 decode tok/s)
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 14.36ms; generated 16 tokens with 15 decode steps in 138.82ms (108.06 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       109.06ms     274.57ms          54.63        16
+cublas        14.36ms     138.82ms         108.06        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 2.039e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 109.06ms | cublas 14.36ms  ->  cublas 7.60x faster
+  decode:  custom 274.57ms | cublas 138.82ms  ->  cublas 1.98x faster
+  end-to-end: custom 383.63ms | cublas 153.17ms  ->  cublas 2.50x faster
+
+[custom] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[custom] --- End generated output ---
+[custom] Timing: prefill 56 tokens in 113.14ms; generated 16 tokens with 15 decode steps in 269.99ms (55.56 decode tok/s)
+
+[cublas] 6 - Multi-step arithmetic -> generated output:
+To find out how many books remain in the library after lending 19 books
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 56 tokens in 14.19ms; generated 16 tokens with 15 decode steps in 142.51ms (105.26 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       113.14ms     269.99ms          55.56        16
+cublas        14.19ms     142.51ms         105.26        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.839e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 113.14ms | cublas 14.19ms  ->  cublas 7.97x faster
+  decode:  custom 269.99ms | cublas 142.51ms  ->  cublas 1.89x faster
+  end-to-end: custom 383.13ms | cublas 156.70ms  ->  cublas 2.44x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 109.58ms | 109.06ms | 1.00x | 1.532e-2 | identical (16/16) |
+| cublas | Legacy one-query | 15.21ms | 14.36ms | 1.06x | 2.416e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 109.58ms | 113.14ms | 0.97x | 8.647e-3 | identical (16/16) |
+| cublas | CUTLASS FMHA | 15.21ms | 14.19ms | 1.07x | 1.936e-2 | identical (16/16) |
+
+--- Prompt 7/12: 7 - Compare totals ---
+Input prompt:
+Run A generated 8 tokens for each of 120 prompts. Run B generated 12 tokens for
+each of the same 120 prompts. Which run generated more tokens, and by how many?
+Show the calculation and answer in one sentence.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 119.25ms; generated 16 tokens with 15 decode steps in 275.73ms (54.40 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 17.91ms; generated 16 tokens with 15 decode steps in 155.14ms (96.69 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       119.25ms     275.73ms          54.40        16
+cublas        17.91ms     155.14ms          96.69        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.388e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 119.25ms | cublas 17.91ms  ->  cublas 6.66x faster
+  decode:  custom 275.73ms | cublas 155.14ms  ->  cublas 1.78x faster
+  end-to-end: custom 394.98ms | cublas 173.05ms  ->  cublas 2.28x faster
+
+[custom] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 130.74ms; generated 16 tokens with 15 decode steps in 310.58ms (48.30 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 20.68ms; generated 16 tokens with 15 decode steps in 158.89ms (94.41 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       130.74ms     310.58ms          48.30        16
+cublas        20.68ms     158.89ms          94.41        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.286e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 130.74ms | cublas 20.68ms  ->  cublas 6.32x faster
+  decode:  custom 310.58ms | cublas 158.89ms  ->  cublas 1.95x faster
+  end-to-end: custom 441.32ms | cublas 179.57ms  ->  cublas 2.46x faster
+
+[custom] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 128.69ms; generated 16 tokens with 15 decode steps in 347.56ms (43.16 decode tok/s)
+
+[cublas] 7 - Compare totals -> generated output:
+Run A generated 960 tokens (8 tokens/prompt * 1
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 38.52ms; generated 16 tokens with 15 decode steps in 242.93ms (61.75 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       128.69ms     347.56ms          43.16        16
+cublas        38.52ms     242.93ms          61.75        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.433e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 128.69ms | cublas 38.52ms  ->  cublas 3.34x faster
+  decode:  custom 347.56ms | cublas 242.93ms  ->  cublas 1.43x faster
+  end-to-end: custom 476.24ms | cublas 281.45ms  ->  cublas 1.69x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 119.25ms | 130.74ms | 0.91x | 1.057e-2 | identical (16/16) |
+| cublas | Legacy one-query | 17.91ms | 20.68ms | 0.87x | 9.417e-3 | identical (16/16) |
+| custom | CUTLASS FMHA | 119.25ms | 128.69ms | 0.93x | 8.836e-3 | identical (16/16) |
+| cublas | CUTLASS FMHA | 17.91ms | 38.52ms | 0.47x | 1.271e-2 | identical (16/16) |
+
+--- Prompt 8/12: 8 - Exact format ---
+Input prompt:
+Return exactly one JSON object with the keys "answer" and "check". Set "answer"
+to the result of 3 times 7 and "check" to the string "3 x 7". Do not include
+Markdown or any text outside the JSON object.
+Input tokens: 73 (identical input fed to every backend)
+
+[custom] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 189.25ms; generated 16 tokens with 15 decode steps in 483.65ms (31.01 decode tok/s)
+
+[cublas] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 20.09ms; generated 16 tokens with 15 decode steps in 239.17ms (62.72 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       189.25ms     483.65ms          31.01        16
+cublas        20.09ms     239.17ms          62.72        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 2.252e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 189.25ms | cublas 20.09ms  ->  cublas 9.42x faster
+  decode:  custom 483.65ms | cublas 239.17ms  ->  cublas 2.02x faster
+  end-to-end: custom 672.91ms | cublas 259.26ms  ->  cublas 2.60x faster
+
+[custom] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 193.43ms; generated 16 tokens with 15 decode steps in 477.13ms (31.44 decode tok/s)
+
+[cublas] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 23.10ms; generated 16 tokens with 15 decode steps in 246.58ms (60.83 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       193.43ms     477.13ms          31.44        16
+cublas        23.10ms     246.58ms          60.83        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 2.051e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 193.43ms | cublas 23.10ms  ->  cublas 8.37x faster
+  decode:  custom 477.13ms | cublas 246.58ms  ->  cublas 1.93x faster
+  end-to-end: custom 670.55ms | cublas 269.68ms  ->  cublas 2.49x faster
+
+[custom] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[custom] --- End generated output ---
+[custom] Timing: prefill 73 tokens in 185.55ms; generated 16 tokens with 15 decode steps in 460.87ms (32.55 decode tok/s)
+
+[cublas] 8 - Exact format -> generated output:
+```json
+{
+  "answer": 21,
+  "check":
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 73 tokens in 39.60ms; generated 16 tokens with 15 decode steps in 244.24ms (61.42 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       185.55ms     460.87ms          32.55        16
+cublas        39.60ms     244.24ms          61.42        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 3.937e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 185.55ms | cublas 39.60ms  ->  cublas 4.69x faster
+  decode:  custom 460.87ms | cublas 244.24ms  ->  cublas 1.89x faster
+  end-to-end: custom 646.42ms | cublas 283.84ms  ->  cublas 2.28x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 189.25ms | 193.43ms | 0.98x | 1.836e-2 | identical (16/16) |
+| cublas | Legacy one-query | 20.09ms | 23.10ms | 0.87x | 2.699e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 189.25ms | 185.55ms | 1.02x | 1.750e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 20.09ms | 39.60ms | 0.51x | 2.876e-2 | identical (16/16) |
+
+--- Prompt 9/12: 9 - Time extraction ---
+Input prompt:
+The workshop began setup at 9:00 AM. Doors opened at 10:30 AM, and the event
+ended at 12:00 PM. How much time passed between the doors opening and the event
+ending? Answer in minutes in one complete sentence.
+Input tokens: 78 (identical input fed to every backend)
+
+[custom] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 183.42ms; generated 16 tokens with 15 decode steps in 459.20ms (32.67 decode tok/s)
+
+[cublas] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 40.53ms; generated 16 tokens with 15 decode steps in 242.97ms (61.74 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       183.42ms     459.20ms          32.67        16
+cublas        40.53ms     242.97ms          61.74        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.661e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 183.42ms | cublas 40.53ms  ->  cublas 4.53x faster
+  decode:  custom 459.20ms | cublas 242.97ms  ->  cublas 1.89x faster
+  end-to-end: custom 642.62ms | cublas 283.50ms  ->  cublas 2.27x faster
+
+[custom] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 184.95ms; generated 16 tokens with 15 decode steps in 453.63ms (33.07 decode tok/s)
+
+[cublas] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 39.69ms; generated 16 tokens with 15 decode steps in 246.07ms (60.96 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       184.95ms     453.63ms          33.07        16
+cublas        39.69ms     246.07ms          60.96        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.574e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 184.95ms | cublas 39.69ms  ->  cublas 4.66x faster
+  decode:  custom 453.63ms | cublas 246.07ms  ->  cublas 1.84x faster
+  end-to-end: custom 638.57ms | cublas 285.76ms  ->  cublas 2.23x faster
+
+[custom] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[custom] --- End generated output ---
+[custom] Timing: prefill 78 tokens in 186.20ms; generated 16 tokens with 15 decode steps in 457.24ms (32.81 decode tok/s)
+
+[cublas] 9 - Time extraction -> generated output:
+The time passed between the doors opening at 10:30 AM and
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 78 tokens in 39.73ms; generated 16 tokens with 15 decode steps in 262.93ms (57.05 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom       186.20ms     457.24ms          32.81        16
+cublas        39.73ms     262.93ms          57.05        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 2.184e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 186.20ms | cublas 39.73ms  ->  cublas 4.69x faster
+  decode:  custom 457.24ms | cublas 262.93ms  ->  cublas 1.74x faster
+  end-to-end: custom 643.44ms | cublas 302.66ms  ->  cublas 2.13x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 183.42ms | 184.95ms | 0.99x | 1.072e-2 | identical (16/16) |
+| cublas | Legacy one-query | 40.53ms | 39.69ms | 1.02x | 1.942e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 183.42ms | 186.20ms | 0.99x | 1.333e-2 | identical (16/16) |
+| cublas | CUTLASS FMHA | 40.53ms | 39.73ms | 1.02x | 1.365e-2 | identical (16/16) |
+
+--- Prompt 10/12: 10 - Approximately 1K-token context ---
+Input prompt:
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+
+Answer with the single word ready.
+Input tokens: 1006 (identical input fed to every backend)
+
+[custom] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[custom] --- End generated output ---
+[custom] Timing: prefill 1006 tokens in 1.14s; generated 12 tokens with 12 decode steps in 432.53ms (27.74 decode tok/s)
+
+[cublas] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 1006 tokens in 200.12ms; generated 12 tokens with 12 decode steps in 236.27ms (50.79 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          1.14s     432.53ms          27.74        12
+cublas       200.12ms     236.27ms          50.79        12
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (12/12)
+  prefill last-token logits: max abs diff (finite) 1.193e-1 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 1.14s | cublas 200.12ms  ->  cublas 5.70x faster
+  decode:  custom 432.53ms | cublas 236.27ms  ->  cublas 1.83x faster
+  end-to-end: custom 1.57s | cublas 436.39ms  ->  cublas 3.61x faster
+
+[custom] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[custom] --- End generated output ---
+[custom] Timing: prefill 1006 tokens in 1.28s; generated 12 tokens with 12 decode steps in 459.37ms (26.12 decode tok/s)
+
+[cublas] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 1006 tokens in 280.71ms; generated 12 tokens with 12 decode steps in 262.29ms (45.75 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          1.28s     459.37ms          26.12        12
+cublas       280.71ms     262.29ms          45.75        12
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (12/12)
+  prefill last-token logits: max abs diff (finite) 9.229e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 1.28s | cublas 280.71ms  ->  cublas 4.55x faster
+  decode:  custom 459.37ms | cublas 262.29ms  ->  cublas 1.75x faster
+  end-to-end: custom 1.74s | cublas 543.00ms  ->  cublas 3.20x faster
+
+[custom] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[custom] --- End generated output ---
+[custom] Timing: prefill 1006 tokens in 1.13s; generated 12 tokens with 12 decode steps in 427.53ms (28.07 decode tok/s)
+
+[cublas] 10 - Approximately 1K-token context -> generated output:
+I'm sorry, but I can't assist with that.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 1006 tokens in 135.99ms; generated 12 tokens with 12 decode steps in 251.20ms (47.77 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          1.13s     427.53ms          28.07        12
+cublas       135.99ms     251.20ms          47.77        12
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (12/12)
+  prefill last-token logits: max abs diff (finite) 4.560e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 1.13s | cublas 135.99ms  ->  cublas 8.31x faster
+  decode:  custom 427.53ms | cublas 251.20ms  ->  cublas 1.70x faster
+  end-to-end: custom 1.56s | cublas 387.20ms  ->  cublas 4.02x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 1.14s | 1.28s | 0.89x | 1.296e-1 | identical (12/12) |
+| cublas | Legacy one-query | 200.12ms | 280.71ms | 0.71x | 1.291e-1 | identical (12/12) |
+| custom | CUTLASS FMHA | 1.14s | 1.13s | 1.01x | 6.366e-2 | identical (12/12) |
+| cublas | CUTLASS FMHA | 200.12ms | 135.99ms | 1.47x | 8.178e-2 | identical (12/12) |
+
+--- Prompt 11/12: 11 - Approximately 4K-token context ---
+Input prompt:
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+
+Answer with the single word ready.
+Input tokens: 4036 (identical input fed to every backend)
+
+[custom] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[custom] --- End generated output ---
+[custom] Timing: prefill 4036 tokens in 4.77s; generated 2 tokens with 2 decode steps in 135.56ms (14.75 decode tok/s)
+
+[cublas] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 4036 tokens in 1.06s; generated 2 tokens with 2 decode steps in 96.42ms (20.74 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          4.77s     135.56ms          14.75         2
+cublas          1.06s      96.42ms          20.74         2
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (2/2)
+  prefill last-token logits: max abs diff (finite) 3.829e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 4.77s | cublas 1.06s  ->  cublas 4.48x faster
+  decode:  custom 135.56ms | cublas 96.42ms  ->  cublas 1.41x faster
+  end-to-end: custom 4.90s | cublas 1.16s  ->  cublas 4.22x faster
+
+[custom] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[custom] --- End generated output ---
+[custom] Timing: prefill 4036 tokens in 5.62s; generated 2 tokens with 2 decode steps in 76.59ms (26.11 decode tok/s)
+
+[cublas] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 4036 tokens in 1.84s; generated 2 tokens with 2 decode steps in 53.41ms (37.44 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          5.62s      76.59ms          26.11         2
+cublas          1.84s      53.41ms          37.44         2
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (2/2)
+  prefill last-token logits: max abs diff (finite) 9.480e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 5.62s | cublas 1.84s  ->  cublas 3.06x faster
+  decode:  custom 76.59ms | cublas 53.41ms  ->  cublas 1.43x faster
+  end-to-end: custom 5.70s | cublas 1.89s  ->  cublas 3.02x faster
+
+[custom] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[custom] --- End generated output ---
+[custom] Timing: prefill 4036 tokens in 2.92s; generated 2 tokens with 2 decode steps in 76.22ms (26.24 decode tok/s)
+
+[cublas] 11 - Approximately 4K-token context -> generated output:
+Ready.
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 4036 tokens in 388.35ms; generated 2 tokens with 2 decode steps in 53.54ms (37.36 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          2.92s      76.22ms          26.24         2
+cublas       388.35ms      53.54ms          37.36         2
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (2/2)
+  prefill last-token logits: max abs diff (finite) 1.562e-1 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 2.92s | cublas 388.35ms  ->  cublas 7.52x faster
+  decode:  custom 76.22ms | cublas 53.54ms  ->  cublas 1.42x faster
+  end-to-end: custom 3.00s | cublas 441.89ms  ->  cublas 6.78x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 4.77s | 5.62s | 0.85x | 2.232e-2 | identical (2/2) |
+| cublas | Legacy one-query | 1.06s | 1.84s | 0.58x | 8.244e-2 | identical (2/2) |
+| custom | CUTLASS FMHA | 4.77s | 2.92s | 1.63x | 5.758e-2 | identical (2/2) |
+| cublas | CUTLASS FMHA | 1.06s | 388.35ms | 2.74x | 1.052e-1 | identical (2/2) |
+
+--- Prompt 12/12: 12 - Approximately 8K-token context ---
+Input prompt:
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test test
+
+Answer with the single word ready.
+Input tokens: 8076 (identical input fed to every backend)
+
+[custom] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[custom] --- End generated output ---
+[custom] Timing: prefill 8076 tokens in 6.04s; generated 16 tokens with 15 decode steps in 692.18ms (21.67 decode tok/s)
+
+[cublas] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 8076 tokens in 1.99s; generated 16 tokens with 15 decode steps in 560.96ms (26.74 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          6.04s     692.18ms          21.67        16
+cublas          1.99s     560.96ms          26.74        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 3.388e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 6.04s | cublas 1.99s  ->  cublas 3.04x faster
+  decode:  custom 692.18ms | cublas 560.96ms  ->  cublas 1.23x faster
+  end-to-end: custom 6.73s | cublas 2.55s  ->  cublas 2.64x faster
+
+[custom] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[custom] --- End generated output ---
+[custom] Timing: prefill 8076 tokens in 14.49s; generated 16 tokens with 15 decode steps in 1.43s (10.48 decode tok/s)
+
+[cublas] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 8076 tokens in 12.19s; generated 16 tokens with 15 decode steps in 913.50ms (16.42 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom         14.49s        1.43s          10.48        16
+cublas         12.19s     913.50ms          16.42        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 1.118e-1 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 14.49s | cublas 12.19s  ->  cublas 1.19x faster
+  decode:  custom 1.43s | cublas 913.50ms  ->  cublas 1.57x faster
+  end-to-end: custom 15.92s | cublas 13.10s  ->  cublas 1.22x faster
+
+[custom] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[custom] --- End generated output ---
+[custom] Timing: prefill 8076 tokens in 4.91s; generated 16 tokens with 15 decode steps in 694.40ms (21.60 decode tok/s)
+
+[cublas] 12 - Approximately 8K-token context -> generated output:
+Ready. test test test test test test test test test test test test test test
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 8076 tokens in 882.99ms; generated 16 tokens with 15 decode steps in 559.77ms (26.80 decode tok/s)
+
+=== Backend comparison ===
+backend       prefill       decode   decode tok/s   gen tok
+custom          4.91s     694.40ms          21.60        16
+cublas       882.99ms     559.77ms          26.80        16
+
+-- custom vs cublas --
+  generated tokens: IDENTICAL (16/16)
+  prefill last-token logits: max abs diff (finite) 7.113e-2 | non-finite: custom=0, cublas=0
+  decoded text: identical
+  prefill: custom 4.91s | cublas 882.99ms  ->  cublas 5.56x faster
+  decode:  custom 694.40ms | cublas 559.77ms  ->  cublas 1.24x faster
+  end-to-end: custom 5.60s | cublas 1.44s  ->  cublas 3.88x faster
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| custom | Legacy one-query | 6.04s | 14.49s | 0.42x | 2.196e-2 | identical (16/16) |
+| cublas | Legacy one-query | 1.99s | 12.19s | 0.16x | 6.714e-2 | identical (16/16) |
+| custom | CUTLASS FMHA | 6.04s | 4.91s | 1.23x | 9.083e-3 | identical (16/16) |
+| cublas | CUTLASS FMHA | 1.99s | 882.99ms | 2.25x | 3.951e-2 | identical (16/16) |
+
+============================================================
+ Inference finished successfully on GPU 3!
+============================================================

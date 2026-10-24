@@ -66,14 +66,15 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     bench_repeat: usize,
 
-    /// Attention implementation used by causal prefill: `flash`, `cutlass`,
-    /// or `both` for a matched head-to-head run. Use --bench-prefill for
-    /// repeated prefill timing comparisons.
+    /// Attention implementation: `flash` (V100 WMMA FlashAttention with
+    /// --attention-format f16; FP32 keeps the one-query implementation),
+    /// `flash-legacy` (one-query ablation), `cutlass-fmha` (alias `cutlass`),
+    /// `both` (FlashAttention vs CUTLASS FMHA), or `all` to include the ablation.
     #[arg(long, default_value = "flash")]
     prefill_attention: String,
 
     /// Attention and KV-cache representation: `f32` (default) or `f16`.
-    /// Use `f16` for a matched FlashAttention/CUTLASS comparison.
+    /// FP16 enables the V100 WMMA FlashAttention kernel and CUTLASS FMHA.
     #[arg(long, default_value = "f32")]
     attention_format: String,
 
@@ -160,14 +161,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let prefill_attention_modes = match args.prefill_attention.to_lowercase().as_str() {
         "flash" => vec![PrefillAttentionBackend::Flash],
-        "cutlass" => vec![PrefillAttentionBackend::Cutlass],
+        "flash-legacy" => vec![PrefillAttentionBackend::FlashLegacy],
+        "cutlass-fmha" | "cutlass" | "fmha" => {
+            vec![PrefillAttentionBackend::CutlassFmha]
+        }
         "both" => vec![
             PrefillAttentionBackend::Flash,
-            PrefillAttentionBackend::Cutlass,
+            PrefillAttentionBackend::CutlassFmha,
+        ],
+        "all" => vec![
+            PrefillAttentionBackend::Flash,
+            PrefillAttentionBackend::FlashLegacy,
+            PrefillAttentionBackend::CutlassFmha,
         ],
         other => {
             return Err(format!(
-                "Unknown --prefill-attention '{other}': expected flash, cutlass, or both"
+                "Unknown --prefill-attention '{other}': expected flash, flash-legacy, cutlass-fmha, both, or all"
             )
             .into());
         }
@@ -181,9 +190,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     };
-    if prefill_attention_modes.contains(&PrefillAttentionBackend::Cutlass) && !attention_f16 {
+    if prefill_attention_modes.contains(&PrefillAttentionBackend::CutlassFmha) && !attention_f16 {
         return Err(
-            "CUTLASS prefill requires --attention-format f16 so its comparison uses FP16 Q/K/V and cache".into(),
+            "CUTLASS FMHA requires --attention-format f16 so its comparison uses FP16 Q/K/V and cache".into(),
         );
     }
     if !args.benchmark_contexts.is_empty() && !args.bench_prefill {
@@ -235,8 +244,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prefill_attention_modes
             .iter()
             .map(|mode| match mode {
-                PrefillAttentionBackend::Flash => "FlashAttention",
-                PrefillAttentionBackend::Cutlass => "CUTLASS",
+                PrefillAttentionBackend::Flash if attention_f16 => "FlashAttention WMMA FP16",
+                PrefillAttentionBackend::Flash => "One-query online-softmax FP32",
+                PrefillAttentionBackend::CutlassFmha => "CUTLASS FMHA",
+                PrefillAttentionBackend::FlashLegacy => "Legacy one-query attention",
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -1264,47 +1275,52 @@ fn print_attention_ab_comparison(results: &[(PrefillAttentionBackend, Vec<Prompt
     else {
         return;
     };
-    let Some((_, cutlass)) = results
-        .iter()
-        .find(|(backend, _)| *backend == PrefillAttentionBackend::Cutlass)
-    else {
-        return;
-    };
-    println!("\n[FP16 prefill attention A/B] FlashAttention vs CUTLASS");
+    println!("\n[FP16 attention comparison] CUDA FlashAttention is the reference");
     println!(
-        "| Linear backend | Flash prefill | CUTLASS prefill | Flash/CUTLASS | Max logit diff | Token agreement |"
+        "| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |"
     );
-    println!("|---|---:|---:|---:|---:|---:|");
-    for flash_run in flash {
-        let Some(cutlass_run) = cutlass.iter().find(|run| run.name == flash_run.name) else {
+    println!("|---|---|---:|---:|---:|---:|---|");
+    for (backend, other_runs) in results {
+        if *backend == PrefillAttentionBackend::Flash {
             continue;
+        }
+        let backend_name = match backend {
+            PrefillAttentionBackend::Flash => "FlashAttention",
+            PrefillAttentionBackend::CutlassFmha => "CUTLASS FMHA",
+            PrefillAttentionBackend::FlashLegacy => "Legacy one-query",
         };
-        let ratio =
-            flash_run.prefill_time.as_secs_f64() / cutlass_run.prefill_time.as_secs_f64().max(1e-9);
-        let agreement = if flash_run.tokens == cutlass_run.tokens {
-            format!(
-                "identical ({}/{})",
-                flash_run.tokens.len(),
-                cutlass_run.tokens.len()
-            )
-        } else {
-            let first_difference = flash_run
-                .tokens
-                .iter()
-                .zip(&cutlass_run.tokens)
-                .position(|(left, right)| left != right)
-                .unwrap_or_else(|| flash_run.tokens.len().min(cutlass_run.tokens.len()));
-            format!("diverge at token {first_difference}")
-        };
-        println!(
-            "| {} | {:.2?} | {:.2?} | {:.2}x | {:.3e} | {} |",
-            flash_run.name,
-            flash_run.prefill_time,
-            cutlass_run.prefill_time,
-            ratio,
-            max_abs_diff(&flash_run.prefill_logits, &cutlass_run.prefill_logits),
-            agreement,
-        );
+        for flash_run in flash {
+            let Some(other_run) = other_runs.iter().find(|run| run.name == flash_run.name) else {
+                continue;
+            };
+            let ratio = flash_run.prefill_time.as_secs_f64()
+                / other_run.prefill_time.as_secs_f64().max(1e-9);
+            let agreement = if flash_run.tokens == other_run.tokens {
+                format!(
+                    "identical ({}/{})",
+                    flash_run.tokens.len(),
+                    other_run.tokens.len()
+                )
+            } else {
+                let first_difference = flash_run
+                    .tokens
+                    .iter()
+                    .zip(&other_run.tokens)
+                    .position(|(left, right)| left != right)
+                    .unwrap_or_else(|| flash_run.tokens.len().min(other_run.tokens.len()));
+                format!("diverge at token {first_difference}")
+            };
+            println!(
+                "| {} | {} | {:.2?} | {:.2?} | {:.2}x | {:.3e} | {} |",
+                flash_run.name,
+                backend_name,
+                flash_run.prefill_time,
+                other_run.prefill_time,
+                ratio,
+                max_abs_diff(&flash_run.prefill_logits, &other_run.prefill_logits),
+                agreement,
+            );
+        }
     }
 }
 

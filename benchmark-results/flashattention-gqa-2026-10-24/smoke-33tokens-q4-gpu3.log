@@ -1,0 +1,65 @@
+   Compiling Engine v0.1.0 (/home/23uec572/Naman_jain/InferenceEngine/tes/InferenceEngine)
+    Finished `release` profile [optimized] target(s) in 6.37s
+     Running `target/release/Engine --gpu 3 --model-dir models/Qwen2.5-1.5B-Instruct --weight-format fp16 --attention-format fp16 --prefill-attention all --max-tokens 1 --linear cublas --bench-prefill --bench-repeat 3 --prefill gemm --benchmark-contexts 33`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 3.
+[2/5] Initializing CUDA Context on GPU 3...
+Initializing CUDA Context on GPU 3...
+CUDA Context and default stream ready on GPU 3.
+   -> Linear backend(s): cublas
+   -> Projection weight format: F16 (FP32 activations and accumulation)
+   -> Prefill attention path(s): FlashAttention, Legacy one-query attention, CUTLASS FMHA
+   -> Attention Q/K/V and KV cache format: FP16
+   -> GPU 3 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-1.5B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 28 layers, hidden=1536, intermediate=8960, 12 q_heads, 2 kv_heads (GQA)
+   -> Safetensors opened: 338 tensors in header.
+   -> Validated 1543714304 parameters (2.88 GiB source weights; 3.31 GiB estimated resident weights as F16).
+   Uploading embedding and final norm weights to GPU...
+   Loading and uploading layer weights: 1/28   Loading and uploading layer weights: 2/28   Loading and uploading layer weights: 3/28   Loading and uploading layer weights: 4/28   Loading and uploading layer weights: 5/28   Loading and uploading layer weights: 6/28   Loading and uploading layer weights: 7/28   Loading and uploading layer weights: 8/28   Loading and uploading layer weights: 9/28   Loading and uploading layer weights: 10/28   Loading and uploading layer weights: 11/28   Loading and uploading layer weights: 12/28   Loading and uploading layer weights: 13/28   Loading and uploading layer weights: 14/28   Loading and uploading layer weights: 15/28   Loading and uploading layer weights: 16/28   Loading and uploading layer weights: 17/28   Loading and uploading layer weights: 18/28   Loading and uploading layer weights: 19/28   Loading and uploading layer weights: 20/28   Loading and uploading layer weights: 21/28   Loading and uploading layer weights: 22/28   Loading and uploading layer weights: 23/28   Loading and uploading layer weights: 24/28   Loading and uploading layer weights: 25/28   Loading and uploading layer weights: 26/28   Loading and uploading layer weights: 27/28   Loading and uploading layer weights: 28/28
+   All model weights are resident on the GPU.
+   -> Model loaded in 12.65s
+   -> Warmup done for backend cublas.
+
+[5/5] Running 1 prompt(s)...
+
+--- Prompt 1/1: Synthetic 33-token context ---
+Input prompt:
+test test test test test test test test test test test test test 
+Input tokens: 33 (identical input fed to every backend)
+[cublas] Long-context GEMM+attention prefill (33 tokens, median of 3): 26.62ms
+
+[cublas] Synthetic 33-token context -> generated output:
+I
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 26.62ms; generated 1 tokens with 0 decode steps in 227.00ns (0.00 decode tok/s)
+[cublas] Long-context GEMM+attention prefill (33 tokens, median of 3): 25.37ms
+
+[cublas] Synthetic 33-token context -> generated output:
+I
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 25.37ms; generated 1 tokens with 0 decode steps in 331.00ns (0.00 decode tok/s)
+[cublas] Long-context GEMM+attention prefill (33 tokens, median of 3): 25.47ms
+
+[cublas] Synthetic 33-token context -> generated output:
+I
+[cublas] --- End generated output ---
+[cublas] Timing: prefill 33 tokens in 25.47ms; generated 1 tokens with 0 decode steps in 313.00ns (0.00 decode tok/s)
+
+[FP16 attention comparison] CUDA FlashAttention is the reference
+| Linear backend | Compared path | Flash prefill | Other prefill | Flash/other | Max logit diff | Token agreement |
+|---|---|---:|---:|---:|---:|---|
+| cublas | Legacy one-query | 26.62ms | 25.37ms | 1.05x | 1.575e-2 | identical (1/1) |
+| cublas | CUTLASS FMHA | 26.62ms | 25.47ms | 1.05x | 2.050e-2 | identical (1/1) |
+
+============================================================
+ Inference finished successfully on GPU 3!
+============================================================

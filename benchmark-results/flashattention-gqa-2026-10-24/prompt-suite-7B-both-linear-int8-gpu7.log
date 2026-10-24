@@ -1,0 +1,26 @@
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running `target/release/Engine --gpu 7 --model-dir models/Qwen2.5-7B-Instruct --weight-format int8 --attention-format fp16 --prefill-attention all --max-tokens 16 --linear both`
+============================================================
+ Causal LM Inference Engine (Rust + CUDA)
+============================================================
+
+[1/5] Selecting NVIDIA GPU...
+Using explicitly requested GPU 7.
+[2/5] Initializing CUDA Context on GPU 7...
+Initializing CUDA Context on GPU 7...
+CUDA Context and default stream ready on GPU 7.
+   -> Linear backend(s): custom, cublas
+   -> Projection weight format: I8 (FP32 activations and accumulation)
+   -> Prefill attention path(s): FlashAttention WMMA FP16, Legacy one-query attention, CUTLASS FMHA
+   -> Attention Q/K/V and KV cache format: FP16
+   -> GPU 7 VRAM allocation and memory transfer verified.
+
+[3/5] Loading Tokenizer from: models/Qwen2.5-7B-Instruct
+   -> Tokenizer successfully loaded.
+
+[4/5] Loading Model Config & Safetensors weights...
+   -> Config: 28 layers, hidden=3584, intermediate=18944, 28 q_heads, 4 kv_heads (GQA)
+   -> Safetensors opened: 339 tensors in header.
+   -> Validated 7615616512 parameters (14.19 GiB source weights; 8.62 GiB estimated resident weights as I8).
+   Uploading embedding and final norm weights to GPU...
+   Loading and uploading layer weights: 1/28   Loading and uploading layer weights: 2/28   Loading and uploading layer weights: 3/28   Loading and uploading layer weights: 4/28   Loading and uploading layer weights: 5/28   Loading and uploading layer weights: 6/28   Loading and uploading layer weights: 7/28   Loading and uploading layer weights: 8/28   Loading and uploading layer weights: 9/28   Loading and uploading layer weights: 10/28   Loading and uploading layer weights: 11/28   Loading and uploading layer weights: 12/28   Loading and uploading layer weights: 13/28   Loading and uploading layer weights: 14/28   Loading and uploading layer weights: 15/28   Loading and uploading layer weights: 16/28   Loading and uploading layer weights: 17/28   Loading and uploading layer weights: 18/28   Loading and uploading layer weights: 19/28   Loading and uploading layer weights: 20/28   Loading and uploading layer weights: 21/28   Loading and uploading layer weights: 22/28   Loading and uploading layer weights: 23/28   Loading and uploading layer weights: 24/28   Loading and uploading layer weights: 25/28   Loading and uploading layer weights: 26/28   Loading and uploading layer weights: 27/28   Loading and uploading layer weights: 28/28Error: "Uploading mlp.up_proj.weight INT8 weights failed: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")"

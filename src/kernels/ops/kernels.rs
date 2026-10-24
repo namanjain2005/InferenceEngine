@@ -1,7 +1,8 @@
 use cudarc::driver::{
     CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
 };
-use cudarc::nvrtc::{Ptx, compile_ptx};
+use cudarc::nvrtc::{CompileOptions, Ptx, compile_ptx, compile_ptx_with_opts};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -201,6 +202,7 @@ pub struct AttentionKernel {
     prefill_flash_4: CudaFunction,
     decode_flash_f16: [CudaFunction; 7],
     prefill_flash_f16: [CudaFunction; 7],
+    prefill_flash_gqa_f16: CudaFunction,
     cast_f32_to_f16: CudaFunction,
     cast_f16_to_f32: CudaFunction,
     _cutlass_module: Arc<CudaModule>,
@@ -213,7 +215,8 @@ pub struct AttentionKernel {
 #[repr(u8)]
 pub enum PrefillAttentionBackend {
     Flash = 0,
-    Cutlass = 1,
+    CutlassFmha = 1,
+    FlashLegacy = 2,
 }
 
 pub struct ArgmaxKernel {
@@ -302,8 +305,27 @@ impl ArgmaxKernel {
 
 impl AttentionKernel {
     pub fn new(context: &Arc<CudaContext>, stream: &Arc<CudaStream>) -> Result<Self, String> {
-        let (module, decode_flash_256) =
-            load_kernel(context, ATTENTION_CUDA, "attention_decode_flash_256")?;
+        // The in-repo fused GQA kernel uses Volta WMMA instructions. Compile
+        // for SM70 so NVRTC exposes those APIs and V100 can execute the PTX.
+        let cuda_root = std::env::var_os("CUDA_HOME")
+            .or_else(|| std::env::var_os("CUDA_PATH"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/usr/local/cuda"));
+        let attention_ptx = compile_ptx_with_opts(
+            ATTENTION_CUDA,
+            CompileOptions {
+                arch: Some("compute_70"),
+                include_paths: vec![cuda_root.join("include").display().to_string()],
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("Compiling attention CUDA kernels failed: {e}"))?;
+        let module = context
+            .load_module(attention_ptx)
+            .map_err(|e| format!("Loading attention CUDA module failed: {e}"))?;
+        let decode_flash_256 = module
+            .load_function("attention_decode_flash_256")
+            .map_err(|e| format!("Loading attention_decode_flash_256 failed: {e}"))?;
         let load = |name: &str| {
             module
                 .load_function(name)
@@ -334,6 +356,7 @@ impl AttentionKernel {
         let prefill_flash_f16 = load_f16("attention_prefill_flash_f16")?
             .try_into()
             .map_err(|_| "Unexpected FP16 prefill kernel count")?;
+        let prefill_flash_gqa_f16 = load("attention_prefill_flash_gqa_f16")?;
         let cast_f32_to_f16 = load("cast_f32_to_f16")?;
         let cast_f16_to_f32 = load("cast_f16_to_f32")?;
 
@@ -342,8 +365,8 @@ impl AttentionKernel {
             .load_module(cutlass_ptx)
             .map_err(|e| format!("Loading CUTLASS attention PTX failed: {e}"))?;
         let cutlass_prefill_f16 = cutlass_module
-            .load_function("cutlass_attention_prefill_f16")
-            .map_err(|e| format!("Loading CUTLASS prefill kernel failed: {e}"))?;
+            .load_function("cutlass_fmha_prefill_f16")
+            .map_err(|e| format!("Loading CUTLASS FMHA kernel failed: {e}"))?;
         let shared_symbol = cutlass_module
             .get_global("cutlass_attention_shared_bytes", stream)
             .map_err(|e| format!("Reading CUTLASS shared-memory size failed: {e}"))?;
@@ -387,6 +410,7 @@ impl AttentionKernel {
             prefill_flash_4,
             decode_flash_f16,
             prefill_flash_f16,
+            prefill_flash_gqa_f16,
             cast_f32_to_f16,
             cast_f16_to_f32,
             _cutlass_module: cutlass_module,
@@ -402,7 +426,8 @@ impl AttentionKernel {
 
     pub fn prefill_backend(&self) -> PrefillAttentionBackend {
         match self.prefill_backend.load(Ordering::Relaxed) {
-            1 => PrefillAttentionBackend::Cutlass,
+            1 => PrefillAttentionBackend::CutlassFmha,
+            2 => PrefillAttentionBackend::FlashLegacy,
             _ => PrefillAttentionBackend::Flash,
         }
     }
@@ -756,8 +781,8 @@ impl AttentionKernel {
     }
 
     /// Causal prefill over an FP16 KV cache. FlashAttention and CUTLASS both
-    /// consume FP16 Q/K/V, accumulate online softmax and output in FP32/FP32,
-    /// then round their output to FP16 before the common FP32 model interface.
+    /// consume FP16 Q/K/V, accumulate softmax and output in FP32, then round
+    /// output to FP16 before the common FP32 model interface.
     #[allow(clippy::too_many_arguments)]
     pub fn forward_prefill_f16(
         &self,
@@ -811,11 +836,11 @@ impl AttentionKernel {
             checked_i32(num_q_heads / num_kv_heads, "Attention heads per KV head")?,
         );
         let backend = self.prefill_backend();
-        if backend == PrefillAttentionBackend::Cutlass {
+        if backend == PrefillAttentionBackend::CutlassFmha {
             let n_kv_heads = checked_i32(num_kv_heads, "Attention KV heads")?;
             let mut output_accum = stream
                 .alloc_zeros::<f32>(q_len)
-                .map_err(|e| format!("Allocating CUTLASS output accumulator failed: {e}"))?;
+                .map_err(|e| format!("Allocating CUTLASS FMHA output accumulator failed: {e}"))?;
             let mut launch = stream.launch_builder(&self.cutlass_prefill_f16);
             launch.arg(&query);
             launch.arg(k_cache);
@@ -834,7 +859,33 @@ impl AttentionKernel {
                     shared_mem_bytes: self.cutlass_shared_bytes,
                 })
             }
-            .map_err(|e| format!("Launching CUTLASS FP16 prefill attention failed: {e}"))?;
+            .map_err(|e| format!("Launching CUTLASS FMHA FP16 prefill failed: {e}"))?;
+        } else if backend == PrefillAttentionBackend::Flash
+            && head_dim <= 128
+            && head_dim % 16 == 0
+            && num_q_heads / num_kv_heads <= 8
+        {
+            // One CTA reuses every 32-key K/V tile across four query positions
+            // and all query heads that share this KV head.
+            let n_kv_heads = checked_i32(num_kv_heads, "Attention KV heads")?;
+            let mut launch = stream.launch_builder(&self.prefill_flash_gqa_f16);
+            launch.arg(&query);
+            launch.arg(k_cache);
+            launch.arg(v_cache);
+            launch.arg(&mut output_half);
+            launch.arg(&sp);
+            launch.arg(&b);
+            launch.arg(&nqh);
+            launch.arg(&n_kv_heads);
+            launch.arg(&hd);
+            unsafe {
+                launch.launch(LaunchConfig {
+                    grid_dim: (batch.div_ceil(4) as u32, num_kv_heads as u32, 1),
+                    block_dim: (THREADS, 1, 1),
+                    shared_mem_bytes: 0,
+                })
+            }
+            .map_err(|e| format!("Launching fused GQA FlashAttention FP16 prefill failed: {e}"))?;
         } else {
             let tile_size = Self::tile_size(head_dim)?;
             let shared_mem_bytes = Self::shared_bytes(tile_size, head_dim)?;

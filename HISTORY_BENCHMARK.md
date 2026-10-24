@@ -622,8 +622,8 @@ the local model fixtures.
 ## CUTLASS SM70 FP16 prefill attention prototype (2026-10-21)
 
 Commit summary: vendor and pin CUTLASS v3.9.2, precompile its fused
-online-softmax attention kernel for SM70, add a selectable CUTLASS causal
-prefill path beside the existing tiled FlashAttention kernel, and add an FP16
+multi-head-attention (FMHA) kernel for SM70, add a selectable CUTLASS FMHA causal
+prefill path beside the existing CUDA FlashAttention kernel, and add an FP16
 Q/K/V plus KV-cache mode shared by both paths. QKV projection fusion was not
 implemented. Decode remains FlashAttention; in FP16 attention mode it consumes
 the FP16 cache and rounds its attention output to FP16 before conversion to the
@@ -648,7 +648,7 @@ Validation evidence:
 | `cargo test --all-targets` | Passed: 2 library tests; binary and example targets passed with 0 tests. |
 | `cargo build --release` | Passed; build-time NVCC generated the pinned CUTLASS PTX for `compute_70`. |
 | 1.5B and 3B BASE_PROMPTS suite | All 12 prompts completed with both attention paths and both linear backends; generated IDs matched per prompt. |
-| 7B BASE_PROMPTS suite | All 12 prompts completed separately on FlashAttention and CUTLASS with custom linear; decoded outputs matched. Combined `both` execution hit shared-GPU OOM at the 8K transition. |
+| 7B BASE_PROMPTS suite | All 12 prompts completed separately on CUDA FlashAttention and CUTLASS FMHA with custom linear; decoded outputs matched. Combined `both` execution hit shared-GPU OOM at the 8K transition. |
 | Exact 1,024 / 4,096 / 8,192-token A/B | All nine model/context cases completed on 1.5B, 3B, and 7B. Each crossed the default 2,048-token KV-cache capacity at 4K/8K and grew successfully. |
 | 14B FP16 load | OOM uploading layer 28 MLP up-projection; no attention benchmark was reached. The resident-weight estimate was 28.96 GiB on a 32 GiB V100 already using about 13 GiB. |
 | Local 0.5B model | Not available. |
@@ -679,3 +679,81 @@ on the V100 with identical generated token IDs (FlashAttention 12.43 ms,
 CUTLASS 11.84 ms prefill). The parent repository no longer stores the copied
 CUTLASS files; a fresh checkout must initialize the submodule as documented in
 [`CUTLASS.md`](CUTLASS.md).
+
+## V100 fused GQA FlashAttention and backend naming (2026-10-24)
+
+Change summary: add an in-repository FP16 WMMA prefill kernel for V100. Each
+CTA processes four query-token positions and all query heads associated with
+one KV head, stores a 32-key tile in shared memory, and reuses it across the
+GQA group. QK and PV use Volta WMMA with FP32 accumulators; the kernel applies
+causal masking and online-softmax updates while retaining the output in shared
+memory. A CTA's K/V loop stops at its last query's causal limit. The old
+one-query online-softmax path remains selectable as `flash-legacy`; `all`
+selects the new path, that ablation, and CUTLASS FMHA in sequence. CUTLASS
+symbols and CLI output now say `FMHA`, distinguishing CUTLASS's fused
+multi-head-attention example from the in-repo FlashAttention algorithm.
+
+The new path is selected by `--prefill-attention flash --attention-format
+f16`. FP32 remains the CLI default and continues to use the one-query CUDA
+path; CUTLASS FMHA also requires FP16 Q/K/V and cache. No QKV projection fusion
+was added.
+
+### Per-case benchmark evidence
+
+Exact contexts used Qwen2.5-1.5B, FP16 projection weights and attention/cache,
+cuBLAS linear, and a median of three synchronized full-model prefill runs
+after one warmup. All three implementations generated identical token IDs.
+The table is end-to-end prefill, not an isolated attention-kernel timing.
+
+| Tokens | Fused GQA FlashAttention | `flash-legacy` | CUTLASS FMHA | Flash vs legacy max logit diff | Flash vs FMHA max logit diff |
+|---:|---:|---:|---:|---:|---:|
+| 1,024 | 197.58 ms | 303.31 ms | 146.45 ms | 1.993e-2 | 1.410e-2 |
+| 4,096 | 1.27 s | 3.12 s | 644.60 ms | 1.988e-2 | 2.328e-2 |
+| 8,192 | 4.10 s | 11.58 s | 1.79 s | 1.926e-2 | 1.832e-2 |
+
+The new kernel was faster than the one-query path at these contexts, while
+CUTLASS FMHA was faster in the same runs. GPU 3 was shared; absolute timings
+are directional. The input lengths beyond 2,048 exercised KV-cache growth.
+The per-case log and exact command are in
+[`BENCHMARK.md`](BENCHMARK.md) and
+[`benchmark-results/flashattention-gqa-2026-10-24/contexts-1k-4k-8k-1.5B-q4-final-gpu3.log`](benchmark-results/flashattention-gqa-2026-10-24/contexts-1k-4k-8k-1.5B-q4-final-gpu3.log).
+A targeted 33-token case crossed the 32-key boundary and ended with one query
+in the four-position tile; FlashAttention, legacy, and CUTLASS generated the
+same token. Its log is
+[`smoke-33tokens-q4-gpu3.log`](benchmark-results/flashattention-gqa-2026-10-24/smoke-33tokens-q4-gpu3.log).
+
+Every prompt in `BASE_PROMPTS.txt` ran on all three attention paths. All 12
+prompts completed with identical generated token IDs for each completed
+model/linear combination below:
+
+| Model | GQA Q heads per KV head | Projection weights and linear path | Attention/cache | Device |
+|---|---:|---|---|---|
+| Qwen2.5-1.5B | 6 | FP16, custom and cuBLAS | FP16 | Tesla V100 GPU 3 |
+| Qwen2.5-3B | 8 | FP16, custom and cuBLAS | FP16 | Tesla V100 GPU 7 |
+| Qwen2.5-7B | 7 | INT8, custom | FP16 | Tesla V100 GPU 4 |
+
+The 7B projection weights used INT8 because the shared V100 did not have enough
+free memory for the FP16 resident set. Its attention inputs/cache remained
+FP16. A 7B `--linear both` attempt hit OOM during model upload on GPU 7 and GPU
+3, before reaching a prompt; the custom-linear suite completed. The 3B
+both-linear attempt on GPU 3 reached the 8K prompt but cuBLAS ran out of memory
+before its attention call; rerunning on GPU 7 completed all prompts. The 14B
+model symlink target is absent locally, so that fixture could not be run. Full
+per-prompt timings and comparisons, including OOM logs, are linked from
+[`BENCHMARK.md`](BENCHMARK.md).
+
+Validation:
+
+| Check | Result |
+|---|---|
+| `nvcc -ptx -arch=compute_70 -std=c++17 -O3 src/kernels/layer/attention.cu` | Passed; V100 WMMA kernel compiled to PTX. |
+| `cargo test --all-targets` | Passed: 2 library tests; binary and both example targets passed with 0 tests. |
+| Targeted 33-token FP16 A/B | Passed; partial four-query tile and 32-key boundary crossed; all three generated IDs matched. |
+| 1.5B and 3B full prompt suites | Passed all 12 prompts across both linear paths and all three attention paths; generated IDs matched. |
+| 7B full prompt suite | Passed all 12 prompts across all three attention paths with INT8 projections, FP16 attention/cache, and custom linear; IDs matched. Both-linear attempts OOMed during upload. |
+
+The CUDA 12.4 / driver 550.144.03 environment exposed eight shared
+Tesla V100-SXM2-32GB devices. GPU utilization and free memory changed during
+the runs; see raw logs for commands, per-prompt timing, and token/logit results.
+Reproduction commands and benchmark interpretation are maintained in
+[`BENCHMARK.md`](BENCHMARK.md) and [`CUTLASS.md`](CUTLASS.md).

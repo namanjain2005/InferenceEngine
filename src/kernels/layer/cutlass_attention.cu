@@ -15,7 +15,7 @@ struct GroupedQueryBatchHook {
   }
 };
 
-using CutlassSm70FlashAttention = AttentionKernel<
+using CutlassSm70Fmha = AttentionKernel<
     cutlass::half_t,
     cutlass::arch::Sm70,
     true,
@@ -27,12 +27,12 @@ using CutlassSm70FlashAttention = AttentionKernel<
     GroupedQueryBatchHook>;
 
 extern "C" __device__ __constant__ unsigned int cutlass_attention_shared_bytes =
-    sizeof(CutlassSm70FlashAttention::SharedStorage);
+    sizeof(CutlassSm70Fmha::SharedStorage);
 
 extern "C" __global__ __launch_bounds__(
-    CutlassSm70FlashAttention::kNumThreads,
-    CutlassSm70FlashAttention::kMinBlocksPerSm)
-void cutlass_attention_prefill_f16(
+    CutlassSm70Fmha::kNumThreads,
+    CutlassSm70Fmha::kMinBlocksPerSm)
+void cutlass_fmha_prefill_f16(
     const cutlass::half_t* q,
     const cutlass::half_t* k,
     const cutlass::half_t* v,
@@ -43,7 +43,7 @@ void cutlass_attention_prefill_f16(
     int num_q_heads,
     int num_kv_heads,
     int head_dim) {
-  CutlassSm70FlashAttention::Params p{};
+  CutlassSm70Fmha::Params p{};
   p.query_ptr = const_cast<cutlass::half_t*>(q);
   p.key_ptr = const_cast<cutlass::half_t*>(k);
   p.value_ptr = const_cast<cutlass::half_t*>(v);
@@ -54,7 +54,7 @@ void cutlass_attention_prefill_f16(
   p.head_dim_value = head_dim;
   p.num_queries = batch;
   p.num_keys = start_pos + batch;
-  p.custom_mask_type = CutlassSm70FlashAttention::CausalFromBottomRight;
+  p.custom_mask_type = CutlassSm70Fmha::CausalFromBottomRight;
   p.causal_diagonal_offset = start_pos;
   p.q_strideM = num_q_heads * head_dim;
   p.k_strideM = num_kv_heads * head_dim;
@@ -72,5 +72,5 @@ void cutlass_attention_prefill_f16(
   if (!p.advance_to_block()) {
     return;
   }
-  CutlassSm70FlashAttention::attention_kernel(p);
+  CutlassSm70Fmha::attention_kernel(p);
 }
